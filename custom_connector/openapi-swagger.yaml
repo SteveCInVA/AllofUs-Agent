@@ -10,7 +10,7 @@ info:
   version: '1.0.0'
 # After you deploy the Azure Function, replace <FUNCTIONAPP-NAME> with your app
 # name (e.g. func-allofus-poc-4821). Host must be public HTTPS.
-host: <functionServiceURL>.azurewebsites.net
+host: <FUNCTIONAPP-NAME>.azurewebsites.net
 basePath: /api
 schemes:
   - https
@@ -72,6 +72,7 @@ paths:
                 type: string
               count:
                 type: integer
+                format: int32
               results:
                 type: array
                 items:
@@ -110,6 +111,7 @@ paths:
                       description: Clickable source link the agent must show.
                     score:
                       type: number
+                      format: float
                       description: Relevance score (higher = more similar).
         '400':
           description: Missing required query parameter

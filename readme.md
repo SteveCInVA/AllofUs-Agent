@@ -10,7 +10,9 @@ The deployment code assumes:
 
 ## Deployment steps
 
-### Deployment Variables
+### Azure Function
+
+#### Deployment Variables
 The following varaiables are defined in the top of the deploy_azure_infrastructure.txt file.  They represent the following configurations:
 
 |Variable|Default Value|Purpose|
@@ -27,7 +29,7 @@ The following varaiables are defined in the top of the deploy_azure_infrastructu
 |$peSubnetStorage|"pe-storage"|Subnet name used for storage acct. private endpoints|
 |$peSubnetStorageAddrSpace|"192.168.0.128/25"|Subnet CIDR for storage acct.|
 
-### Infrastructure Deployment Process
+#### Infrastructure Deployment Process
 
 The code used to deploy the infrastructure can be found in /deployment/deploy_azure_infrastructure.txt
 
@@ -58,7 +60,7 @@ Deployment will perform the following:
 - Update Azure Function to use system assigned managed identity to access storage account
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
 
-### Function Code Deployment
+#### Function Code Deployment
 
 Use the same window that the infrastructure deployment completed in.
 
@@ -71,11 +73,11 @@ func azure functionapp publish $functionSvcName --build remote
 
 When successfully deployed user will see the deployed functions and the URL associated to each.
 
-## Testing
+#### Testing
 
 Testing scrips can be found in /deployment/testing_azure_functions.txt
 
-### Testing Variables
+##### Testing Variables
 The following parameters are defined in the /deployment/testing_azure_functions.txt file
 
 |Variable|Default Value|Purpose|
@@ -89,6 +91,39 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 - Health - evaluates response from the Health endpoint and returns number of records in cache
 - Refresh - causes the cache to become invalidated and forces a refresh
 - Search - Executes a basic query and displays results
+
+## Custom Connector (AKA Copilot Studio Tools)
+
+1. Open the /custom_connector/openapi-swagger.yaml file.
+
+1. Replace the values found in:  host: <functionServiceURL>.azurewebsites.net with the correct URL deployed in prior section.
+
+1. Naviate to https://copilotstudio.microsoft.com
+
+1. Naviate to Tools -> New Tool -> Custom Connector
+    > This will launch the Power Apps Custom Connector screen
+
+1. New Custom Connector -> Import an OpenAPI file
+Provide the connector name and the /custom_connector/openapi-swagger.yaml file
+    > **NOTE:** This file must have the correct URL specified in before importing.
+    
+    - Optional: After importing the openapi-swagger.yaml file, configure the connector icon available in /custom_connector/icons
+
+1. Click Update connector to save the custom connector.
+
+1. Click Test and create a new connection.  The API key can be found in the Azure Function under Functions > App keys > default
+
+1. Select "childhood asthama" as the query, "both" for directory, 8 for top then click "Test operation"
+
+Expect a Status 200 response with a body response with identified articiles.
+
+
+
+
+
+
+
+
 
 
 ## Known Issues
