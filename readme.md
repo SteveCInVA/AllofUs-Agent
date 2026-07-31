@@ -2,8 +2,10 @@
 - https://www.researchallofus.org/research-project-directory/
 - https://www.researchallofus.org/publication-directory/
 
-Steve Carroll - Microsoft
-Intial version:  2026-07-10
+---
+- Steve Carroll - Microsoft
+- Intial version:  2026-07-10
+
 
 ## Assumptions:
 The deployment code assumes:
