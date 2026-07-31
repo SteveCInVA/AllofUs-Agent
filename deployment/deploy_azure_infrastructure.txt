@@ -1,0 +1,192 @@
+# NIH - Provision Azure function resources - Changes required from original plan:
+# Assumes existing subscription and calling user has permissions to deploy objects
+
+##################################################
+# update the folloing variables as required
+
+$rg  = "rg-allofus-demo31"
+$loc = "eastus"
+$sfx = "aou0731"
+$storageAcctName = "staallofus$sfx"
+$functionSvcName = "func-allofus-$sfx"
+$vnetName = "vnet-allofus"
+$vnetAddressSpace = "192.168.0.0/24"
+$funcSubnetName = "pe-functions"
+$funcSubnetAddrSpace = "192.168.0.0/25"
+$peSubnetStorage = "pe-storage"
+$peSubnetStorageAddrSpace = "192.168.0.128/25"
+
+##################################################
+
+az login
+
+# Resource Group
+az group create `
+  --name $rg `
+  --location $loc
+
+# Create Networking
+az network vnet create `
+  --resource-group $rg `
+  --name $vnetName `
+  --address-prefix $vnetAddressSpace `
+  --subnet-name $funcSubnetName `
+  --subnet-prefix $funcSubnetAddrSpace
+
+az network vnet subnet create `
+  --resource-group $rg `
+  --vnet-name $vnetName `
+  --name $peSubnetStorage `
+  --address-prefixes $peSubnetStorageAddrSpace
+
+# Storage Account Creation
+az storage account create `
+  --name $storageAcctName `
+  --resource-group $rg `
+  --location $loc `
+  --min-tls-version TLS1_2 `
+  --sku Standard_LRS
+
+# Azure Function Creation
+az functionapp create `
+  --name $functionSvcName `
+  --resource-group $rg `
+  --storage-account $storageAcctName `
+  --flexconsumption-location $loc `
+  --runtime python `
+  --runtime-version 3.12 `
+  --vnet $vnetName `
+  --subnet $funcSubnetName `
+  --disable-app-insights `
+  --deployment-storage-auth-type SystemAssignedIdentity `
+  --assign-identity [system]
+
+# Required for the Python v2 programming model:
+az functionapp config appsettings set `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --settings AzureWebJobsFeatureFlags=EnableWorkerIndexing
+
+# retrieve the principal id from azure function
+$sami = az functionapp identity show `
+    --resource-group $rg `
+    --name $functionSvcName `
+    --query principalId `
+    --output tsv
+
+# Get storage account resource id
+$storageId = az storage account show `
+	--resource-group $rg `
+	--name $storageAcctName `
+	--query id `
+	--output tsv
+
+# Assign Storage Blob Data Contributor
+az role assignment create `
+  --assignee-object-id $sami `
+  --assignee-principal-type ServicePrincipal `
+  --role "Storage Blob Data Contributor" `
+  --scope $storageId
+
+az role assignment create `
+  --assignee-object-id $sami `
+  --assignee-principal-type ServicePrincipal `
+  --role "Storage Queue Data Contributor" `
+  --scope $storageId
+
+az role assignment create `
+  --assignee-object-id $sami `
+  --assignee-principal-type ServicePrincipal `
+  --role "Storage Table Data Contributor" `
+  --scope $storageId
+
+$zones = @(
+    "privatelink.blob.core.windows.net",
+    "privatelink.queue.core.windows.net",
+    "privatelink.table.core.windows.net"
+)
+
+foreach ($zone in $zones) {
+    az network private-dns zone create `
+        --resource-group $rg `
+        --name $zone
+
+    $linkName = "link-" + $zone.Split(".")[1]
+
+    az network private-dns link vnet create `
+        --resource-group $rg `
+        --zone-name $zone `
+        --name $linkName `
+        --virtual-network $vnetName `
+        --registration-enabled false
+}
+
+az network private-endpoint create `
+	--resource-group $rg `
+	--name "pe-$storageAcctName-blob" `
+	--vnet-name $vnetName `
+	--subnet $peSubnetStorage `
+	--private-connection-resource-id $storageId `
+	--group-id blob `
+	--connection-name "pl-$storageAcctName-blob"
+
+az network private-endpoint dns-zone-group create `
+    --resource-group $rg `
+    --endpoint-name "pe-$storageAcctName-blob" `
+    --name "storage-dns" `
+    --private-dns-zone "privatelink.blob.core.windows.net" `
+    --zone-name blob
+
+foreach ($service in @("queue", "table")) {
+    az network private-endpoint create `
+        --resource-group $rg `
+        --name "pe-$storageAcctName-$service" `
+        --vnet-name $vnetName `
+        --subnet $peSubnetStorage `
+        --private-connection-resource-id $storageId `
+        --group-id $service `
+        --connection-name "pl-$storageAcctName-$service"
+
+    az network private-endpoint dns-zone-group create `
+        --resource-group $rg `
+        --endpoint-name "pe-$storageAcctName-$service" `
+        --name "storage-dns" `
+        --private-dns-zone "privatelink.$service.core.windows.net" `
+        --zone-name $service
+}
+
+# update AzureWebJobsStorage to use System Managed Identity
+az functionapp config appsettings delete `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --setting-names AzureWebJobsStorage
+
+az functionapp config appsettings set `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --settings `
+      "AzureWebJobsStorage__accountName=$storageAcctName" `
+      "AzureWebJobsStorage__credential=managedidentity"
+
+
+az functionapp config appsettings set `
+    --resource-group $rg `
+    --name $functionSvcName `
+    --settings `
+        "AzureWebJobsFeatureFlags=EnableWorkerIndexing"
+
+az functionapp cors add `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --allowed-origins "https://portal.azure.com"
+
+az functionapp cors add `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --allowed-origins "https://ms.portal.azure.com"
+
+##################################
+# Infrastructure deployment complete
+##################################
+
+

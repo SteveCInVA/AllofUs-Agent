@@ -1,0 +1,5 @@
+azure-functions
+azure-storage-blob
+azure-identity
+rank_bm25
+numpy

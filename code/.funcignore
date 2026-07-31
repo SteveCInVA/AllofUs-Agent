@@ -1,0 +1,9 @@
+.git*
+.vscode/
+__pycache__/
+.venv/
+venv/
+local.settings.json
+data/
+*.md
+build_index.py

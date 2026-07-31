@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Azure Functions local artifacts
+.python_packages/
+local.settings.json
+
+# Note: code/corpus.pkl is intentionally tracked (first-run fallback snapshot)

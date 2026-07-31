@@ -1,0 +1,63 @@
+# Testing Azure Functions:
+
+##################################
+Test function after deployment
+##################################
+
+$rg  = "rg-allofus-demo01"
+$sfx = "aou1234"
+$app = "func-allofus-$sfx"
+$uri = "https://$app.azurewebsites.net/api"
+
+##########################################
+# capture function keys for auth in header 
+##########################################
+
+$key = az functionapp keys list `
+    --resource-group $rg `
+    --name $app `
+    --query "functionKeys.default" `
+    --output tsv
+
+$headers = @{
+    "x-functions-key" = $key
+}
+
+##########################################
+
+$health_uri = "$uri/health"
+
+$response = Invoke-RestMethod `
+  -Method Get `
+  -Uri "$health_uri"
+
+$response | ConvertTo-Json -Depth 10
+clear-variable -Name response
+
+##########################################
+
+$refresh_uri = "$uri/refresh"
+
+$response = Invoke-RestMethod `
+    -Method Post `
+    -Uri "$refresh_uri" `
+    -Headers $headers
+
+$response | ConvertTo-Json -Depth 10
+clear-variable -Name response
+
+##########################################
+
+$search_uri = "$uri/search"
+
+$query = [System.Uri]::EscapeDataString(
+    "childhood asthma air pollution"
+)
+
+$response = Invoke-RestMethod `
+    -Method Get `
+    -Uri "$search_uri`?query=$query&directory=project&top=3" `
+    -Headers $headers
+
+$response | ConvertTo-Json -Depth 10
+clear-variable -Name response

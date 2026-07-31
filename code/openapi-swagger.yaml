@@ -1,0 +1,118 @@
+swagger: '2.0'
+info:
+  title: NIH All of Us Directory Search
+  description: >-
+    Finds All of Us research that is similar to a description the user provides,
+    by searching the public All of Us publication directory and research project
+    directory. Returns ranked matches with a source link for each. Call this
+    whenever the user describes a research idea, topic, method, or question and
+    wants to find related All of Us work.
+  version: '1.0.0'
+# After you deploy the Azure Function, replace <FUNCTIONAPP-NAME> with your app
+# name (e.g. func-allofus-poc-4821). Host must be public HTTPS.
+host: <functionServiceURL>.azurewebsites.net
+basePath: /api
+schemes:
+  - https
+consumes:
+  - application/json
+produces:
+  - application/json
+securityDefinitions:
+  functionKey:
+    type: apiKey
+    in: header
+    name: x-functions-key
+security:
+  - functionKey: []
+paths:
+  /search:
+    get:
+      summary: Find similar All of Us research
+      description: >-
+        Search 1,432 publications and 25,898 research projects from the All of Us
+        Research Hub for work similar to the user's description. Returns the most
+        likely matches, each with a title and a clickable source url that the
+        agent must present to the user.
+      operationId: searchDirectories
+      parameters:
+        - name: query
+          in: query
+          required: true
+          type: string
+          description: >-
+            A natural-language description of the research the user is interested
+            in, e.g. "how air pollution exposure affects asthma in children".
+        - name: directory
+          in: query
+          required: false
+          type: string
+          default: both
+          enum: [publication, project, both]
+          description: >-
+            Which directory to search. Use 'publication' for published papers,
+            'project' for active Researcher Workbench projects, or 'both'.
+        - name: top
+          in: query
+          required: false
+          type: integer
+          default: 8
+          minimum: 1
+          maximum: 25
+          description: Number of matches to return (1-25).
+      responses:
+        '200':
+          description: Ranked similar-work matches
+          schema:
+            type: object
+            properties:
+              query:
+                type: string
+              directory:
+                type: string
+              count:
+                type: integer
+              results:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    source:
+                      type: string
+                      description: "'publication' or 'project'"
+                    title:
+                      type: string
+                    date:
+                      type: string
+                    journal:
+                      type: string
+                    institutions:
+                      type: string
+                    authors:
+                      type: array
+                      items:
+                        type: string
+                    focus:
+                      type: array
+                      items:
+                        type: string
+                    access_tier:
+                      type: string
+                    citations:
+                      type: string
+                    snippet:
+                      type: string
+                      description: Excerpt of the abstract/description for grounding.
+                    url:
+                      type: string
+                      description: Clickable source link the agent must show.
+                    score:
+                      type: number
+                      description: Relevance score (higher = more similar).
+        '400':
+          description: Missing required query parameter
+        '500':
+          description: Search error
+definitions: {}
