@@ -59,6 +59,30 @@ def load_feed(url, blob_name=None):
         raise
 
 
+def load_feed_resilient(url, blob_name):
+    """Fetch a feed without raising on failure.
+
+    On a successful live fetch the result is cached to the blob. On failure it
+    falls back to the last cached copy. Returns (data, status) where status is
+    "live", "cache", or "failed" (data is None only when "failed").
+    """
+    try:
+        data = fetch(url)
+        try:
+            storage.upload_blob(blob_name, json.dumps(data).encode("utf-8"))
+        except Exception as exc:  # noqa: BLE001  (caching is best-effort)
+            logging.warning("  could not cache %s: %s", blob_name, exc)
+        return data, "live"
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("  live fetch failed for %s: %s", url, exc)
+        raw = storage.download_blob(blob_name)
+        if raw:
+            logging.warning("  using cached snapshot %s", blob_name)
+            return json.loads(raw), "cache"
+        logging.error("  no cached snapshot for %s; feed unavailable", blob_name)
+        return None, "failed"
+
+
 def fetch_all(local_dir=None):
     """Return (publications, projects) as parsed JSON lists."""
     pubs = load_feed(PUBLICATIONS, "publications.json")

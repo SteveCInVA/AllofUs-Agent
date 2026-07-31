@@ -92,4 +92,4 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 
 
 ## Known Issues
-- Problem manually running the refresh function.  Throws an error 500.  I believe its due to a permission issue saving back to storage.
+- ~~Problem manually running the refresh function.  Throws an error 500.  I believe its due to a permission issue saving back to storage.~~
