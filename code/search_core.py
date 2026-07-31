@@ -117,12 +117,31 @@ DISPLAY_FIELDS = ("id", "source", "title", "authors", "institutions", "date",
                   "journal", "focus", "access_tier", "citations", "url", "snippet")
 
 
-def build_artifact_bytes(pub_rows, proj_rows):
-    """Normalize both feeds and return (pickle_bytes, record_count)."""
+def build_artifact_bytes(pub_rows, proj_rows, carried_docs=None, carried_tokens=None):
+    """Normalize both feeds and return (pickle_bytes, record_count).
+
+    carried_docs/carried_tokens append already-normalized records from a
+    previous snapshot, letting a refresh preserve a feed whose live source is
+    unavailable instead of dropping it from the corpus.
+    """
     docs = norm_publications(pub_rows) + norm_projects(proj_rows)
     tokens = [tokenize(d["_body"]) for d in docs]
     slim = [{k: d.get(k) for k in DISPLAY_FIELDS} for d in docs]
+    if carried_docs:
+        slim += carried_docs
+        tokens += carried_tokens or []
     return pickle.dumps({"docs": slim, "tokens": tokens}, protocol=4), len(slim)
+
+
+def carry_source(artifact_bytes, source):
+    """Return (slim_docs, tokens) for one source from an existing artifact."""
+    data = pickle.loads(artifact_bytes)
+    docs, toks = [], []
+    for d, t in zip(data.get("docs", []), data.get("tokens", [])):
+        if d.get("source") == source:
+            docs.append(d)
+            toks.append(t)
+    return docs, toks
 
 
 def build_artifact(pub_rows, proj_rows, out_path):

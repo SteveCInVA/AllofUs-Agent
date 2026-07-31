@@ -77,7 +77,11 @@ def load_feed_resilient(url, blob_name):
         logging.warning("  live fetch failed for %s: %s", url, exc)
         raw = storage.download_blob(blob_name)
         if raw:
-            logging.warning("  using cached snapshot %s", blob_name)
+            logging.warning("  using cached snapshot %s; copying it into the refreshed cache", blob_name)
+            try:
+                storage.upload_blob(blob_name, raw)  # carry old cache content forward
+            except Exception as up_exc:  # noqa: BLE001  (re-cache is best-effort)
+                logging.warning("  could not re-cache %s: %s", blob_name, up_exc)
             return json.loads(raw), "cache"
         logging.error("  no cached snapshot for %s; feed unavailable", blob_name)
         return None, "failed"
