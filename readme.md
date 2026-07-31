@@ -2,6 +2,9 @@
 - https://www.researchallofus.org/research-project-directory/
 - https://www.researchallofus.org/publication-directory/
 
+Steve Carroll - Microsoft
+Intial version:  2026-07-10
+
 ## Assumptions:
 The deployment code assumes:
 - Active Azure Subscription
@@ -181,4 +184,3 @@ Expect a Status 200 response with a body response with identified articiles.
 
 ---
 ## Known Issues
-- ~~Problem manually running the refresh function.  Throws an error 500.  I believe its due to a permission issue saving back to storage.~~
