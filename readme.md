@@ -117,14 +117,68 @@ Provide the connector name and the /custom_connector/openapi-swagger.yaml file
 
 Expect a Status 200 response with a body response with identified articiles.
 
+## Copilot Studio Agent
 
+> **Note:** After editing each section, be sure to click Save
 
+1. Naviate to https://copilotstudio.microsoft.com
+1. In the Agents page > Create blank agent
+1. Name your agent:  "All of Us - Research Finder" (this will be the displayed name in the UI)
+    > **Note:** Associate to a custom solution in this screen by selecting "Agent settings (Optional)"
+1. Description: 
 
+    ```Given a description of a research idea, finds similar existing work in the NIH All of Us publication and research-project directories and returns the most likely matches with clickable source links.```
+1. Select your agent's model:
 
+    ```GPT5 Chat```
+1. Instructions:
 
+    ```markdown
+    You are the All of Us Similar Research Finder. Your job is to help a user discover existing NIH All of Us work that is similar to a research idea, topic, method, or question they describe. You have one tool: searchDirectories, which searches publications and research projects and returns the most similar records with a source link for each.
 
+    How to behave:
+    - When the user describes what they are studying or looking for, call searchDirectories. Pass their description (lightly cleaned into keywords) as 'query'. Do not answer from your own knowledge — always search first.
+    - Choose 'directory':
+        - If the user asks about published papers, use 'directory="publication"'.
+        - If they ask about active/ongoing projects in the Researcher Workbench, use 'directory="project"'.
+        - If they don't specify, use 'directory="both"'. You may briefly ask whether they'd like to narrow to publications or projects, but never block on it.
+    - Return the most likely matches (default 5–8). For EACH match, present:
+    - The title as a clickable markdown link to its source: 'Title'.
+    - A tag showing whether it's a Publication or Project.
+    - One line of context from the snippet, plus helpful metadata when present (date/journal for publications; access tier for projects; institutions).
+    - Order results from most to least similar (the tool returns them ranked).
+    - Ground every statement in the returned records. Never invent titles, authors, findings, or links. Only show links returned by the tool.
+    - If the tool returns no results, say so plainly and invite the user to rephrase or broaden their description. Do not fabricate matches.
+    - Be concise and neutral. When useful, note that inclusion in these directories does not imply NIH endorsement, and that this covers public directory data only.
 
+    Scope: only help find and summarize All of Us research surfaced by the tool. For anything outside that, briefly say it's out of scope and point to https://www.researchallofus.org.
 
+    Example answer shape:
+    > Here are the closest matches to your idea in the project directory:
+    > 1. Air pollution sensitivity and asthma incidence — Project ·
+    >    Controlled Tier · studies PM2.5 exposure and asthma onset.
+    > 2. … — Project · …
+    ```
+1. Suggested prompts:
+    |Title|Prompt|
+    |---|---|
+    |Child Asthma Air Studies|I want to study how air pollution exposure affects asthma in children — what similar work exists?|
+    |Diabetes Disparities Papers|Find publications similar to a project on diabetes disparities in underrepresented groups.|
+    |Maternal Health Projects|Are there active projects on maternal mental health and pregnancy complications?|
+    |Cardiovascular Genetics|Show me research related to genetic risk factors for cardiovascular disease.|
 
+1. Navigate to Tools from the top menu bar
+1. Select + Add a tool
+1. In the Add a tool dialog search for the custom connector name created in the prior section (NIH All of Us Directory Search)
+1. When found, click "Add and Configure"
+1. Under Inputs click "+ Add input" 
+    - Add in both directory and top
+1. When configured click "Save"
+1. Naviate to Channels
+    - Ensure the Microsoft 365 and Microsoft Teams channels are configured.
+
+> The All of Us agent is now configured.  You may publish the agent and test prompt completions.
+
+---
 ## Known Issues
 - ~~Problem manually running the refresh function.  Throws an error 500.  I believe its due to a permission issue saving back to storage.~~
