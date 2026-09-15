@@ -56,7 +56,7 @@ $query = [System.Uri]::EscapeDataString(
 
 $response = Invoke-RestMethod `
     -Method Get `
-    -Uri "$search_uri`?query=$query&directory=project&top=3" `
+    -Uri "$search_uri`?query=$query&directory=all&top=5" `
     -Headers $headers
 
 $response | ConvertTo-Json -Depth 10
