@@ -4,11 +4,12 @@ ingests. To add a source, create a source_<name>.py that exposes a `SOURCES`
 list of `Source` objects and register it here.
 """
 import source_allofus
+import source_ihcc
 
 # Each module contributes a list of Source objects.
 _MODULES = [
     source_allofus,
-    # source_ihcc,   # added in the IHCC step
+    source_ihcc,
     # source_ccdi,   # added in the CCDI step
 ]
 
