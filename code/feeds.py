@@ -1,18 +1,16 @@
 """
-Fetching the two public All of Us JSON feeds.
+HTTP fetching and per-source resilient ingestion.
 
-Shared by build_index.py (local build) and the Azure Function refresh jobs.
-Includes a retry loop and an optional local-file fallback used only when a
-local data directory is supplied (handy for offline local builds).
+`fetch` is a small retrying JSON GET used by simple sources. `load_source_resilient`
+runs a source's fetch+normalize, caches the normalized records to Blob Storage,
+and — on any failure — falls back to that cached copy so a single source being
+down never blanks its slice of the corpus.
 """
-import logging
 import json
-import os
+import logging
 import urllib.request
-import storage
 
-PUBLICATIONS = "https://www.researchallofus.org/wp-json/rh-data-caching/publications-report"
-PROJECTS = "https://www.researchallofus.org/wp-json/rh-data-caching/projects"
+import storage
 
 
 def fetch(url, retries=3, timeout=180):
@@ -29,67 +27,35 @@ def fetch(url, retries=3, timeout=180):
     raise last
 
 
+def load_source_resilient(source):
+    """Fetch + normalize one source, caching normalized docs to blob.
 
-# def load_feed(url, local_name=None, local_dir=None):
-#     """Fetch a feed; if it fails and a local copy exists, use that."""
-#     try:
-#         return fetch(url)
-#     except Exception as exc:  # noqa: BLE001
-#         if local_dir and local_name:
-#             local = os.path.join(local_dir, local_name)
-#             if os.path.exists(local):
-#                 logging.warning("  live fetch failed (%s); using local %s", exc, local)
-#                 with open(local, "r", encoding="utf-8") as fh:
-#                     return json.load(fh)
-#         raise
-
-def load_feed(url, blob_name=None):
-    try:
-        logging.info("Fetching feed %s…", url)
-        data = fetch(url)
-        if blob_name:
-            storage.upload_blob(blob_name, json.dumps(data).encode("utf-8"))
-        return data
-    except Exception as exc:
-        if blob_name:
-            raw = storage.download_blob(blob_name)
-            if raw:
-                logging.warning("  live fetch failed (%s); using blob %s", exc, blob_name)
-                return json.loads(raw)
-        raise
-
-
-def load_feed_resilient(url, blob_name):
-    """Fetch a feed without raising on failure.
-
-    On a successful live fetch the result is cached to the blob. On failure it
-    falls back to the last cached copy. Returns (data, status) where status is
-    "live", "cache", or "failed" (data is None only when "failed").
+    Returns (docs, status) where status is:
+      "live"   fresh fetch succeeded (and was cached)
+      "cache"  fetch/normalize failed; served the last cached normalized docs
+      "failed" no live data and no cache (docs is None)
     """
     try:
-        data = fetch(url)
+        raw = source.fetch()
+        docs = source.normalize(raw)
         try:
-            storage.upload_blob(blob_name, json.dumps(data).encode("utf-8"))
+            storage.upload_blob(source.cache_blob,
+                                json.dumps(docs).encode("utf-8"))
         except Exception as exc:  # noqa: BLE001  (caching is best-effort)
-            logging.warning("  could not cache %s: %s", blob_name, exc)
-        return data, "live"
+            logging.warning("  could not cache %s: %s", source.cache_blob, exc)
+        return docs, "live"
     except Exception as exc:  # noqa: BLE001
-        logging.warning("  live fetch failed for %s: %s", url, exc)
-        raw = storage.download_blob(blob_name)
+        logging.warning("  live ingest failed for %s: %s", source.key, exc)
+        raw = storage.download_blob(source.cache_blob)
         if raw:
-            logging.warning("  using cached snapshot %s; copying it into the refreshed cache", blob_name)
             try:
-                storage.upload_blob(blob_name, raw)  # carry old cache content forward
-            except Exception as up_exc:  # noqa: BLE001  (re-cache is best-effort)
-                logging.warning("  could not re-cache %s: %s", blob_name, up_exc)
-            return json.loads(raw), "cache"
-        logging.error("  no cached snapshot for %s; feed unavailable", blob_name)
+                docs = json.loads(raw)
+                storage.upload_blob(source.cache_blob, raw)  # carry cache forward
+                logging.warning("  using cached docs for %s (%d records)",
+                                source.key, len(docs))
+                return docs, "cache"
+            except Exception as exc2:  # noqa: BLE001
+                logging.warning("  cached docs for %s unreadable: %s",
+                                source.key, exc2)
+        logging.error("  no data available for %s", source.key)
         return None, "failed"
-
-
-def fetch_all(local_dir=None):
-    """Return (publications, projects) as parsed JSON lists."""
-    pubs = load_feed(PUBLICATIONS, "publications.json")
-    projs = load_feed(PROJECTS, "projects.json")
-    return pubs, projs
-

@@ -25,6 +25,7 @@ import azure.functions as func
 from search_core import load_engine, load_engine_from_bytes, search
 import storage
 from refresh_job import rebuild_and_upload
+from sources import source_keys
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -94,7 +95,8 @@ def search_directories(req: func.HttpRequest) -> func.HttpResponse:
             body = {}
 
     query = (req.params.get("query") or body.get("query") or "").strip()
-    directory = (req.params.get("directory") or body.get("directory") or "both").lower()
+    directory = (req.params.get("directory") or body.get("directory")
+                 or req.params.get("source") or body.get("source") or "both").lower()
     try:
         top = int(req.params.get("top") or body.get("top") or 8)
     except (TypeError, ValueError):
@@ -106,7 +108,9 @@ def search_directories(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"error": "The 'query' parameter is required."}),
             status_code=400, mimetype="application/json")
 
-    if directory not in ("publication", "project", "both"):
+    allowed = set(source_keys()) | {"publication", "project", "publications",
+                                    "projects", "both", "all"}
+    if directory not in allowed:
         directory = "both"
 
     try:
@@ -163,6 +167,10 @@ def refresh_now(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     docs, _ = _engine()
+    counts = {}
+    for d in docs:
+        counts[d.get("source")] = counts.get(d.get("source"), 0) + 1
     return func.HttpResponse(
-        json.dumps({"status": "ok", "records": len(docs), "source": _SOURCE}),
+        json.dumps({"status": "ok", "records": len(docs),
+                    "source": _SOURCE, "counts": counts}),
         mimetype="application/json")
