@@ -2,12 +2,13 @@ swagger: '2.0'
 info:
   title: NIH All of Us Directory Search
   description: >-
-    Finds All of Us research that is similar to a description the user provides,
-    by searching the public All of Us publication directory and research project
-    directory. Returns ranked matches with a source link for each. Call this
-    whenever the user describes a research idea, topic, method, or question and
-    wants to find related All of Us work.
-  version: '1.0.0'
+    Finds research and datasets similar to a description the user provides, by
+    searching four public sources: the All of Us publication directory and
+    research project directory, the IHCC Cohort Atlas (health cohorts), and the
+    CCDI Federation (pediatric cancer datasets). Returns ranked matches with a
+    source link for each. Call this whenever the user describes a research idea,
+    topic, disease, cohort, or dataset and wants to find related work.
+  version: '1.1.0'
 # After you deploy the Azure Function, replace <FUNCTIONAPP-NAME> with your app
 # name (e.g. func-allofus-poc-4821). Host must be public HTTPS.
 host: <FUNCTIONAPP-NAME>.azurewebsites.net
@@ -28,11 +29,12 @@ security:
 paths:
   /search:
     get:
-      summary: Find similar All of Us research
+      summary: Find similar research and datasets
       description: >-
-        Search 1,432 publications and 25,898 research projects from the All of Us
-        Research Hub for work similar to the user's description. Returns the most
-        likely matches, each with a title and a clickable source url that the
+        Search four public sources for work similar to the user's description:
+        All of Us publications (~1,400) and research projects (~25,900), IHCC
+        health cohorts (~90), and CCDI pediatric-cancer datasets (~300). Returns
+        the most likely matches, each with a title and a clickable source url the
         agent must present to the user.
       operationId: searchDirectories
       parameters:
@@ -41,17 +43,20 @@ paths:
           required: true
           type: string
           description: >-
-            A natural-language description of the research the user is interested
-            in, e.g. "how air pollution exposure affects asthma in children".
+            A natural-language description of the research, topic, disease,
+            cohort, or dataset the user is interested in, e.g. "how air pollution
+            exposure affects asthma in children".
         - name: directory
           in: query
           required: false
           type: string
-          default: both
-          enum: [publication, project, both]
+          default: all
+          enum: [all, publication, project, ihcc, ccdi]
           description: >-
-            Which directory to search. Use 'publication' for published papers,
-            'project' for active Researcher Workbench projects, or 'both'.
+            Which source to search. 'publication' = All of Us published papers,
+            'project' = All of Us Researcher Workbench projects, 'ihcc' = IHCC
+            health cohorts, 'ccdi' = CCDI pediatric-cancer datasets, or 'all' to
+            search every source (default).
         - name: top
           in: query
           required: false
@@ -82,7 +87,10 @@ paths:
                       type: string
                     source:
                       type: string
-                      description: "'publication' or 'project'"
+                      description: "One of: publication, project, ihcc, ccdi"
+                    record_type:
+                      type: string
+                      description: "Human label: Publication, Project, Cohort, or Dataset"
                     title:
                       type: string
                     date:
@@ -91,6 +99,28 @@ paths:
                       type: string
                     institutions:
                       type: string
+                    organization:
+                      type: string
+                      description: Organization for a CCDI dataset.
+                    countries:
+                      type: array
+                      items:
+                        type: string
+                      description: Countries for an IHCC cohort.
+                    diseases:
+                      type: array
+                      items:
+                        type: string
+                      description: Diseases studied by an IHCC cohort.
+                    data_types:
+                      type: array
+                      items:
+                        type: string
+                      description: Data types available in an IHCC cohort.
+                    enrollment:
+                      type: integer
+                      format: int32
+                      description: Participant count for an IHCC cohort.
                     authors:
                       type: array
                       items:

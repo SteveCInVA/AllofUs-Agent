@@ -1,6 +1,10 @@
-# Copilot Agent to assist with query of the All of Us dataset hosted by NIH.
-- https://www.researchallofus.org/research-project-directory/
-- https://www.researchallofus.org/publication-directory/
+# Copilot Agent to assist with finding similar research and datasets across NIH-affiliated sources.
+
+The agent searches four public sources for work similar to a description the user provides:
+- All of Us Research Project Directory — https://www.researchallofus.org/research-project-directory/
+- All of Us Publication Directory — https://www.researchallofus.org/publication-directory/
+- IHCC Cohort Atlas (health cohorts) — https://ihccglobal.org/ (ingested from the Apache-2.0 `IHCC-cohorts/data-harmonization` GitHub source)
+- CCDI Federation (pediatric cancer datasets, study level) — https://federation.ccdi.cancer.gov/api/v1
 
 ---
 - Steve Carroll - Microsoft
@@ -93,8 +97,8 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 |$uri|"https://$app.azurewebsites.net/api"|Not needed unless operating in other than commericial Azure subscription|
 
 ### Testing functions
-- Health - evaluates response from the Health endpoint and returns number of records in cache
-- Refresh - causes the cache to become invalidated and forces a refresh
+- Health - evaluates response from the Health endpoint and returns the total number of records in cache plus a per-source `counts` breakdown (publication, project, ihcc, ccdi)
+- Refresh - causes the cache to become invalidated and forces a refresh (rebuilds from all sources; a source that is temporarily unavailable falls back to its last cached copy so the corpus is never blanked)
 - Search - Executes a basic query and displays results
 
 ## Custom Connector (AKA Copilot Studio Tools)
@@ -118,7 +122,7 @@ Provide the connector name and the /custom_connector/openapi-swagger.yaml file
 
 1. Click Test and create a new connection.  The API key can be found in the Azure Function under Functions > App keys > default
 
-1. Select "childhood asthama" as the query, "both" for directory, 8 for top then click "Test operation"
+1. Select "childhood asthma" as the query, "all" for directory, 8 for top then click "Test operation"
 
 Expect a Status 200 response with a body response with identified articiles.
 
@@ -132,37 +136,43 @@ Expect a Status 200 response with a body response with identified articiles.
     > **Note:** Associate to a custom solution in this screen by selecting "Agent settings (Optional)"
 1. Description: 
 
-    ```Given a description of a research idea, finds similar existing work in the NIH All of Us publication and research-project directories and returns the most likely matches with clickable source links.```
+    ```Given a description of a research idea, disease, cohort, or dataset, finds similar existing work across four NIH-affiliated sources — All of Us publications and research projects, IHCC health cohorts, and CCDI pediatric-cancer datasets — and returns the most likely matches with clickable source links.```
 1. Select your agent's model:
 
     ```GPT5 Chat```
 1. Instructions:
 
     ```markdown
-    You are the All of Us Similar Research Finder. Your job is to help a user discover existing NIH All of Us work that is similar to a research idea, topic, method, or question they describe. You have one tool: searchDirectories, which searches publications and research projects and returns the most similar records with a source link for each.
+    You are the All of Us Research Finder. Your job is to help a user discover existing work similar to a research idea, topic, disease, cohort, or dataset they describe. You have one tool: searchDirectories, which searches four public sources and returns the most similar records with a source link for each:
+    - publication — All of Us published papers
+    - project — All of Us Researcher Workbench projects
+    - ihcc — IHCC health cohorts (name, countries, diseases, data types, enrollment)
+    - ccdi — CCDI pediatric-cancer datasets (study level)
 
     How to behave:
     - When the user describes what they are studying or looking for, call searchDirectories. Pass their description (lightly cleaned into keywords) as 'query'. Do not answer from your own knowledge — always search first.
     - Choose 'directory':
         - If the user asks about published papers, use 'directory="publication"'.
         - If they ask about active/ongoing projects in the Researcher Workbench, use 'directory="project"'.
-        - If they don't specify, use 'directory="both"'. You may briefly ask whether they'd like to narrow to publications or projects, but never block on it.
+        - If they ask about health cohorts or study populations, use 'directory="ihcc"'.
+        - If they ask about pediatric or childhood cancer datasets, use 'directory="ccdi"'.
+        - If they don't specify, use 'directory="all"' to search every source. You may briefly ask whether they'd like to narrow to a specific source, but never block on it.
     - Return the most likely matches (default 5–8). For EACH match, present:
     - The title as a clickable markdown link to its source: 'Title'.
-    - A tag showing whether it's a Publication or Project.
-    - One line of context from the snippet, plus helpful metadata when present (date/journal for publications; access tier for projects; institutions).
+    - A tag showing the record type (Publication, Project, Cohort, or Dataset).
+    - One line of context from the snippet, plus helpful metadata when present (date/journal for publications; access tier for projects; countries/diseases/enrollment for cohorts; organization for datasets).
     - Order results from most to least similar (the tool returns them ranked).
     - Ground every statement in the returned records. Never invent titles, authors, findings, or links. Only show links returned by the tool.
     - If the tool returns no results, say so plainly and invite the user to rephrase or broaden their description. Do not fabricate matches.
-    - Be concise and neutral. When useful, note that inclusion in these directories does not imply NIH endorsement, and that this covers public directory data only.
+    - Be concise and neutral. When useful, note that inclusion does not imply NIH endorsement, and that this covers public directory/registry data only.
 
-    Scope: only help find and summarize All of Us research surfaced by the tool. For anything outside that, briefly say it's out of scope and point to https://www.researchallofus.org.
+    Scope: only help find and summarize research and datasets surfaced by the tool. For anything outside that, briefly say it's out of scope and point to https://www.researchallofus.org.
 
     Example answer shape:
-    > Here are the closest matches to your idea in the project directory:
+    > Here are the closest matches to your idea:
     > 1. Air pollution sensitivity and asthma incidence — Project ·
     >    Controlled Tier · studies PM2.5 exposure and asthma onset.
-    > 2. … — Project · …
+    > 2. … — Cohort · Canada · ~345,000 participants · …
     ```
 1. Suggested prompts:
     |Title|Prompt|
@@ -171,6 +181,8 @@ Expect a Status 200 response with a body response with identified articiles.
     |Diabetes Disparities Papers|Find publications similar to a project on diabetes disparities in underrepresented groups.|
     |Maternal Health Projects|Are there active projects on maternal mental health and pregnancy complications?|
     |Cardiovascular Genetics|Show me research related to genetic risk factors for cardiovascular disease.|
+    |Population Health Cohorts|Are there large population health cohorts with genomic and EHR data?|
+    |Pediatric Cancer Datasets|What pediatric cancer datasets are available for childhood tumors?|
 
 1. Navigate to Tools from the top menu bar
 1. Select + Add a tool
@@ -186,3 +198,8 @@ Expect a Status 200 response with a body response with identified articiles.
 
 ---
 ## Known Issues
+
+- **IHCC Cohort Atlas live site**: the atlas at ihccglobal.org is frequently in maintenance and its live data carries a "mock/demo data — not appropriate for research" disclaimer. The agent therefore ingests the authoritative harmonized cohort metadata from the consortium's Apache-2.0 GitHub repo (`IHCC-cohorts/data-harmonization/data/cohort-data.json`) instead of the live API. There is no per-cohort deep link, so cohort results link to each cohort's own website.
+- **CCDI Federation API is slow**: the aggregation endpoints (`/namespace`, `/info`, `/organization`) can take ~2 minutes each (~4 minutes total) because they fan out to federated member nodes, and an individual node may time out (its records are simply omitted for that refresh). The refresh uses a long timeout and no retry, and caches the result; searches always serve the cached snapshot so end-user latency is unaffected.
+- **CCDI study-level search signal is limited**: study descriptions are generic per organization, so per-study matching is driven mainly by the study identifier. Richer disease-level search would require line-level Subject/Sample ingestion, which is out of scope (and governed by controlled-access agreements).
+- **Source filter vocabulary**: the `directory` parameter now accepts `all`, `publication`, `project`, `ihcc`, and `ccdi`. The legacy value `both` is still accepted and treated the same as `all`.
