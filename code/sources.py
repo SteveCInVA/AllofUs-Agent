@@ -5,12 +5,13 @@ list of `Source` objects and register it here.
 """
 import source_allofus
 import source_ihcc
+import source_ccdi
 
 # Each module contributes a list of Source objects.
 _MODULES = [
     source_allofus,
     source_ihcc,
-    # source_ccdi,   # added in the CCDI step
+    source_ccdi,
 ]
 
 ALL_SOURCES = [s for m in _MODULES for s in getattr(m, "SOURCES", [])]
