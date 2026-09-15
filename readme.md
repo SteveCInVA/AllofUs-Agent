@@ -9,6 +9,8 @@ The agent searches four public sources for work similar to a description the use
 ---
 - Steve Carroll - Microsoft
 - Intial version:  2026-07-10
+  - Updated:       2026-07-31 - Support cache refresh / expiration
+  - Updated:       2026-09-15 - Improved handling of new datasets + added in IHCC and CCDI datasets.
 
 
 ## Assumptions:
