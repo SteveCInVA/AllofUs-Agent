@@ -1,0 +1,15 @@
+flowchart LR
+    U["User"] --> AG["Copilot Studio agent"]
+    AG --> CC["Custom connector<br/>searchDirectories"]
+    CC -->|"GET /api/search"| FN["Azure Function"]
+    FN --> RES["Ranked matches<br/>title + snippet + source URL"]
+
+    FN -->|"pulls on refresh"| SRC
+
+    subgraph SRC["Public data sources"]
+      direction TB
+      P1["All of Us Publications"]
+      P2["All of Us Projects"]
+      P3["IHCC Cohorts (GitHub JSON)"]
+      P4["CCDI Federation (REST)"]
+    end

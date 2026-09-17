@@ -1,0 +1,19 @@
+flowchart TB
+    Q["GET /api/search"] --> ENG{"in-memory<br/>corpus loaded?"}
+
+    ENG -- "no, first call" --> L1{"blob snapshot<br/>exists?"}
+    L1 -- "yes" --> LB["load from Blob"]
+    L1 -- "no" --> LP["load packaged corpus.pkl"]
+
+    ENG -- "yes" --> STALE{"ETag changed?"}
+    STALE -- "yes" --> RB["reload from Blob"]
+    STALE -- "no" --> USE["use in-memory engine"]
+
+    LB --> USE
+    LP --> USE
+    RB --> USE
+
+    USE --> SRCH["BM25 score + rank"]
+    SRCH --> FLT["filter by source"]
+    FLT --> TOP["top N + score,<br/>drop empty fields"]
+    TOP --> J["JSON results<br/>title + snippet + url"]

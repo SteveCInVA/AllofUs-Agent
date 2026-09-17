@@ -6,6 +6,10 @@ returns ranked matches with clickable source links. The backend is an Azure
 Functions (Python v2) app that keeps a BM25 search index over a normalized,
 refreshable corpus.
 
+> **PNG exports** of every diagram (for non-GitHub viewers) are in
+> [`docs/diagrams/`](diagrams/); the `.mmd` sources there can be re-rendered with
+> `mmdc -i <file>.mmd -o <file>.png -b white -s 2`.
+
 ---
 
 ## 1. End-to-end context

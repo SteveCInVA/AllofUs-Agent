@@ -1,0 +1,7 @@
+flowchart LR
+    RAW["raw source data<br/>JSON / REST"] --> NORM["normalized record<br/>id, source, record_type,<br/>title, url, snippet, _body,<br/>+ source fields"]
+    NORM --> STORE["stored record<br/>(minus _body)"]
+    NORM --> TOK["BM25 tokens<br/>from _body"]
+    STORE --> CORP["corpus.pkl<br/>docs + tokens"]
+    TOK --> CORP
+    CORP --> HIT["search result<br/>record + score"]

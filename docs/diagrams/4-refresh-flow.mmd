@@ -1,0 +1,20 @@
+flowchart TB
+    T["Timer 03:00 UTC"] --> RB["rebuild_and_upload"]
+    H["POST /api/refresh"] --> RB
+    RB --> LOOP["for each registered source"]
+
+    LOOP --> F{"live fetch<br/>+ normalize"}
+    F -- "ok" --> C1["cache to blob<br/>status = live"]
+    F -- "fail" --> CACHE{"blob cache?"}
+    CACHE -- "yes" --> C2["use cache<br/>status = cache"]
+    CACHE -- "no" --> CARRY{"in previous<br/>corpus?"}
+    CARRY -- "yes" --> C3["carry forward<br/>status = carried"]
+    CARRY -- "no" --> C4["omitted<br/>status = failed"]
+
+    C1 --> AGG["collect docs"]
+    C2 --> AGG
+    C3 --> AGG
+
+    AGG --> BUILD["build artifact<br/>tokenize + drop _body"]
+    BUILD --> UP["upload corpus to Blob"]
+    UP --> INV["invalidate in-memory<br/>+ hot-reload via ETag"]
