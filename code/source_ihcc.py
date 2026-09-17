@@ -106,7 +106,8 @@ def norm_ihcc(rows):
             "_body": " ".join([name, " ".join(countries), pi,
                                " ".join(diseases), " ".join(lifestyle),
                                " ".join(data_types), " ".join(cohort_kinds),
-                               " ".join(ancestry), clean(r.get("description", ""))]),
+                               " ".join(ancestry), clean(r.get("description", "")),
+                               "health cohort"]),
         })
     return out
 

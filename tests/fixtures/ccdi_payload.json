@@ -1,0 +1,42 @@
+{
+  "info": [
+    {
+      "source": "PCDC",
+      "server": {
+        "owner": "Pediatric Cancer Data Common",
+        "about_url": "https://commons.cri.uchicago.edu/pcdc/",
+        "name": "PCDC Federation Service"
+      }
+    }
+  ],
+  "orgs": [
+    [
+      {"identifier": "pcdc", "name": "Pediatric Cancer Data Common",
+       "metadata": {"institution": [{"value": "UChicago"}]}}
+    ],
+    {"source": "DEADNODE", "errors": [{"kind": "NotFound", "message": "Request Timeout."}]}
+  ],
+  "namespaces": [
+    [
+      {
+        "id": {"organization": "pcdc", "name": "B953"},
+        "contact_email": "pcdc_help@lists.uchicago.edu",
+        "description": "The PCDC harnesses pediatric cancer clinical data.",
+        "metadata": {
+          "study_name": {"value": "B953"},
+          "study_short_title": {"value": null},
+          "study_id": {"value": null}
+        }
+      },
+      {
+        "id": {"organization": "pcdc", "name": "AAML0531"},
+        "description": "Acute myeloid leukemia study.",
+        "metadata": {
+          "study_name": {"value": "AAML0531"},
+          "study_short_title": {"value": "AML Study"}
+        }
+      }
+    ],
+    {"source": "DEADNODE", "errors": [{"kind": "NotFound", "message": "Request Timeout."}]}
+  ]
+}

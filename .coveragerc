@@ -1,0 +1,12 @@
+[run]
+source = code
+omit =
+    */__pycache__/*
+    */.python_packages/*
+    code/build_index.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

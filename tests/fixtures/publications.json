@@ -1,0 +1,29 @@
+[
+  {
+    "record_id": "1",
+    "show_on_site": "1",
+    "calc_author_list": [
+      {"ForeName": "Jane", "LastName": "Doe"},
+      {"ForeName": "John", "LastName": "Smith"}
+    ],
+    "calc_institution_list": "Brown University|Rutgers",
+    "calc_date_year": "2022",
+    "calc_date_month": "10",
+    "calc_date_day": "19",
+    "common_focus": "1",
+    "population_health_focus": "1",
+    "rare_focus": "0",
+    "calc_title": "Air pollution and childhood asthma",
+    "calc_abstract": "We studied <b>air pollution</b> exposure and asthma in children %28kids%29.",
+    "lay_summary": "Kids and air pollution.",
+    "calc_journal_title": "Journal of Test",
+    "icite_count": "9",
+    "link": "https://pubmed.ncbi.nlm.nih.gov/1"
+  },
+  {
+    "record_id": "2",
+    "show_on_site": "0",
+    "calc_title": "This record is hidden",
+    "link": "https://pubmed.ncbi.nlm.nih.gov/2"
+  }
+]

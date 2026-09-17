@@ -1,0 +1,22 @@
+[
+  {
+    "workspaceId": 101,
+    "title": "Maternal mental health and pregnancy hypertension",
+    "purposes": ["Disease Focused Research", "Methods Development"],
+    "questions": "Study population: people who were pregnant.",
+    "approaches": "Logistic regression to estimate odds ratios.",
+    "findings": "Stratify the model by race/ethnic group.",
+    "focusCategories": ["Population Health", "Maternal and Child Health"],
+    "accessTier": "Controlled Tier",
+    "reviewUrl": "https://redcap.pmi-ops.org/surveys/?s=X&rw_workspace_id=101",
+    "team": {
+      "owner": [
+        {"name": "Nina Cesare", "institution": "Boston University"},
+        {"name": "Minhyuk Choi", "institution": "UCSF"}
+      ],
+      "members": [
+        {"name": "Xavier Test", "institution": "Rush University"}
+      ]
+    }
+  }
+]
