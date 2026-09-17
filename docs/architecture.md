@@ -13,125 +13,134 @@ refreshable corpus.
 ```mermaid
 flowchart LR
     U["User"] --> AG["Copilot Studio agent"]
-    AG --> CC["Power Platform custom connector<br/>operation: searchDirectories"]
-    CC -->|"GET /api/search<br/>x-functions-key"| FN["Azure Function"]
+    AG --> CC["Custom connector<br/>searchDirectories"]
+    CC -->|"GET /api/search"| FN["Azure Function"]
     FN --> RES["Ranked matches<br/>title + snippet + source URL"]
-    RES --> AG --> U
+
+    FN -->|"pulls on refresh"| SRC
 
     subgraph SRC["Public data sources"]
-      P1["All of Us Publications<br/>WordPress JSON"]
-      P2["All of Us Projects<br/>WordPress JSON"]
-      P3["IHCC Cohort Atlas<br/>Apache-2.0 GitHub JSON"]
-      P4["CCDI Federation<br/>REST API - study level"]
+      direction TB
+      P1["All of Us Publications"]
+      P2["All of Us Projects"]
+      P3["IHCC Cohorts (GitHub JSON)"]
+      P4["CCDI Federation (REST)"]
     end
-    SRC -.ingested on refresh.-> FN
 ```
+
+*Left-to-right request pipeline; the data sources hang off the Function on a
+single ingest edge so nothing crosses the request path.*
 
 ---
 
-## 2. Module map (what depends on what)
+## 2. Module map (dependencies)
+
+Layered top-to-bottom: entry point → orchestration → registry → source modules →
+shared libraries. Each source module (`source_allofus`, `source_ihcc`,
+`source_ccdi`) uses the same shared libraries, so those are drawn as one edge from
+the group instead of nine crossing edges.
 
 ```mermaid
-flowchart TD
-    subgraph HOST["Azure Functions host"]
-      FA["function_app.py<br/>HTTP: /search /refresh /health<br/>timer: daily refresh<br/>in-memory cache + hot-reload"]
+flowchart TB
+    FA["function_app.py<br/>routes /search /refresh /health + timer"]
+
+    subgraph ORCH["Orchestration"]
+      direction LR
+      RJ["refresh_job.py"]
+      BI["build_index.py"]
     end
 
-    FA --> RJ["refresh_job.py<br/>orchestrates a rebuild"]
-    FA --> SC["search_core.py<br/>build artifact + BM25 search"]
-    FA --> ST["storage.py<br/>Blob: corpus + per-source cache"]
-    FA --> SRCS["sources.py<br/>source registry"]
+    REG["sources.py<br/>registry"]
 
-    RJ --> SRCS
-    RJ --> FEED["feeds.py<br/>HTTP fetch + resilient per-source ingest"]
-    RJ --> SC
-    RJ --> ST
+    subgraph SRCMODS["Source modules"]
+      direction LR
+      SA["source_allofus"]
+      SI["source_ihcc"]
+      SD["source_ccdi"]
+    end
 
-    SRCS --> SA["source_allofus.py"]
-    SRCS --> SI["source_ihcc.py"]
-    SRCS --> SD["source_ccdi.py"]
+    subgraph SHARED["Shared libraries"]
+      direction LR
+      SC["search_core.py"]
+      FEED["feeds.py"]
+      ST["storage.py"]
+      SB["source_base.py"]
+    end
 
-    SA --> SB["source_base.py<br/>Source dataclass"]
-    SI --> SB
-    SD --> SB
-    SA --> FEED
-    SI --> FEED
-    SD --> FEED
-    SA --> SC
-    SI --> SC
-    SD --> SC
+    FA --> ORCH
+    FA --> REG
+    RJ --> REG
+    REG --> SRCMODS
 
+    SRCMODS --> SB
+    SRCMODS --> FEED
+    SRCMODS --> SC
+
+    ORCH --> SHARED
+    FA --> SHARED
     FEED --> ST
-
-    BI["build_index.py<br/>local first-run corpus.pkl"] --> SRCS
-    BI --> SC
 ```
-
-**Roles**
-- **function_app.py** — the only Functions entry point: 3 HTTP routes + 1 timer; owns the in-memory engine and hot-reload.
-- **sources.py / source_base.py** — the registry and the `Source` abstraction (`key`, `label`, `fetch()`, `normalize()`). Adding a source = new `source_*.py` + one registry line.
-- **source_allofus / source_ihcc / source_ccdi** — per-source fetch + normalize into the common record schema.
-- **feeds.py** — HTTP `fetch()` and `load_source_resilient()` (cache to blob, fall back to cache).
-- **search_core.py** — source-agnostic: builds the artifact (tokenize + drop `_body`) and runs BM25 search/filter.
-- **storage.py** — Blob helpers for the corpus snapshot and per-source caches (managed identity or connection string).
-- **refresh_job.py** — iterates the registry and assembles a new corpus with per-source resilience.
-- **build_index.py** — builds the packaged `corpus.pkl` first-run fallback.
 
 ---
 
 ## 3. Search request flow (three-layer cache)
 
 ```mermaid
-flowchart TD
-    Q["GET /api/search?query=...&directory=all&top=8"] --> ENG{"in-memory<br/>corpus loaded?"}
-    ENG -- "no" --> L1{"blob snapshot<br/>exists?"}
-    L1 -- "yes" --> LB["load from Blob<br/>build BM25"]
-    L1 -- "no" --> LP["load packaged corpus.pkl<br/>build BM25"]
-    ENG -- "yes" --> STALE{"ETag changed<br/>since last check?"}
-    STALE -- "yes" --> LB
+flowchart TB
+    Q["GET /api/search"] --> ENG{"in-memory<br/>corpus loaded?"}
+
+    ENG -- "no, first call" --> L1{"blob snapshot<br/>exists?"}
+    L1 -- "yes" --> LB["load from Blob"]
+    L1 -- "no" --> LP["load packaged corpus.pkl"]
+
+    ENG -- "yes" --> STALE{"ETag changed?"}
+    STALE -- "yes" --> RB["reload from Blob"]
     STALE -- "no" --> USE["use in-memory engine"]
+
     LB --> USE
     LP --> USE
-    USE --> SRCH["search_core.search<br/>BM25 score + rank"]
-    SRCH --> FLT["filter by source<br/>publication|project|ihcc|ccdi|all"]
-    FLT --> TOP["take top N, add score,<br/>drop empty fields"]
-    TOP --> J["JSON: results with title + snippet + url"]
+    RB --> USE
+
+    USE --> SRCH["BM25 score + rank"]
+    SRCH --> FLT["filter by source"]
+    FLT --> TOP["top N + score,<br/>drop empty fields"]
+    TOP --> J["JSON results<br/>title + snippet + url"]
 ```
 
-Layers: **(1)** in-memory per worker (fast path), **(2)** Blob snapshot (refreshable
-without redeploy; workers re-check the ETag every `CORPUS_CHECK_SECONDS`), **(3)**
-packaged `corpus.pkl` (first-run fallback). `_body` is never returned.
+Layers: **(1)** in-memory per worker, **(2)** Blob snapshot (refreshable without
+redeploy; ETag re-checked every `CORPUS_CHECK_SECONDS`), **(3)** packaged
+`corpus.pkl` first-run fallback. `_body` is never returned.
 
 ---
 
-## 4. Refresh flow (timer + on-demand, per-source resilience)
+## 4. Refresh flow (per-source resilience)
 
 ```mermaid
-flowchart TD
+flowchart TB
     T["Timer 03:00 UTC"] --> RB["rebuild_and_upload"]
     H["POST /api/refresh"] --> RB
     RB --> LOOP["for each registered source"]
 
-    LOOP --> F{"live fetch + normalize"}
-    F -- "ok" --> C1["cache normalized docs to blob<br/>status = live"]
-    F -- "fail" --> CACHE{"per-source<br/>blob cache?"}
-    CACHE -- "yes" --> C2["use cached docs<br/>status = cache"]
-    CACHE -- "no" --> CARRY{"records in<br/>previous corpus?"}
+    LOOP --> F{"live fetch<br/>+ normalize"}
+    F -- "ok" --> C1["cache to blob<br/>status = live"]
+    F -- "fail" --> CACHE{"blob cache?"}
+    CACHE -- "yes" --> C2["use cache<br/>status = cache"]
+    CACHE -- "no" --> CARRY{"in previous<br/>corpus?"}
     CARRY -- "yes" --> C3["carry forward<br/>status = carried"]
-    CARRY -- "no" --> C4["status = failed<br/>source omitted"]
+    CARRY -- "no" --> C4["omitted<br/>status = failed"]
 
     C1 --> AGG["collect docs"]
     C2 --> AGG
     C3 --> AGG
-    AGG --> BUILD["build_artifact_bytes<br/>tokenize + drop _body"]
+
+    AGG --> BUILD["build artifact<br/>tokenize + drop _body"]
     BUILD --> UP["upload corpus to Blob"]
-    UP --> INV["invalidate in-memory<br/>workers hot-reload via ETag"]
-    UP --> SUM["summary: per-source counts + statuses<br/>degraded if any not live"]
+    UP --> INV["invalidate in-memory<br/>+ hot-reload via ETag"]
 ```
 
-**Resilience guarantee:** a single source being down (e.g. the IHCC atlas in
-maintenance, or a CCDI node timing out) never blanks the corpus — it falls back to
-its last cache, then to carry-forward from the previous snapshot.
+**Resilience guarantee:** a single source being down (IHCC atlas in maintenance,
+a CCDI node timing out) never blanks the corpus — it falls back to its last cache,
+then to carry-forward from the previous snapshot.
 
 ---
 
@@ -139,12 +148,12 @@ its last cache, then to carry-forward from the previous snapshot.
 
 ```mermaid
 flowchart LR
-    RAW["raw source data<br/>JSON / REST"] -->|"Source.normalize"| NORM["normalized record<br/>id, source, record_type,<br/>title, url, snippet, _body,<br/>+ source-specific fields"]
-    NORM -->|"build_artifact_bytes"| STORE["stored record<br/>same, minus _body"]
-    NORM -->|"tokenize _body"| TOK["BM25 tokens<br/>parallel list"]
+    RAW["raw source data<br/>JSON / REST"] --> NORM["normalized record<br/>id, source, record_type,<br/>title, url, snippet, _body,<br/>+ source fields"]
+    NORM --> STORE["stored record<br/>(minus _body)"]
+    NORM --> TOK["BM25 tokens<br/>from _body"]
     STORE --> CORP["corpus.pkl<br/>docs + tokens"]
     TOK --> CORP
-    CORP -->|"search + rank"| HIT["search result<br/>stored record + score"]
+    CORP --> HIT["search result<br/>record + score"]
 ```
 
 Every record shares the required keys `id, source, record_type, title, url,
