@@ -1,4 +1,4 @@
-"""Tests for function_app HTTP handlers and the cache engine."""
+"""Tests for function_app: HTTP handlers, per-entitlement engine, manifest health."""
 import json
 
 import azure.functions as func
@@ -13,11 +13,13 @@ HANDLERS = {f.get_function_name(): f.get_user_function()
 
 
 @pytest.fixture(autouse=True)
-def reset_engine():
-    fa._DOCS = fa._BM25 = fa._ETAG = fa._SOURCE = None
+def reset_caches():
+    fa._index_cache.clear()
+    fa._engine_cache.clear()
     fa._LAST_CHECK = 0.0
     yield
-    fa._DOCS = fa._BM25 = fa._ETAG = fa._SOURCE = None
+    fa._index_cache.clear()
+    fa._engine_cache.clear()
     fa._LAST_CHECK = 0.0
 
 
@@ -29,7 +31,7 @@ def _req(method="GET", params=None, body=b""):
 def _mock_engine(monkeypatch, sample_docs):
     docs, bm25 = search_core.load_engine_from_bytes(
         search_core.build_artifact_bytes(sample_docs)[0])
-    monkeypatch.setattr(fa, "_engine", lambda: (docs, bm25))
+    monkeypatch.setattr(fa, "_engine", lambda keys: (docs, bm25))
     return docs
 
 
@@ -37,114 +39,141 @@ def _mock_engine(monkeypatch, sample_docs):
 
 def test_search_missing_query_400(monkeypatch, sample_docs):
     _mock_engine(monkeypatch, sample_docs)
-    resp = HANDLERS["search_directories"](_req(params={}))
-    assert resp.status_code == 400
+    assert HANDLERS["search_directories"](_req(params={})).status_code == 400
 
 
 def test_search_happy(monkeypatch, sample_docs):
     _mock_engine(monkeypatch, sample_docs)
     resp = HANDLERS["search_directories"](_req(params={"query": "childhood asthma"}))
-    assert resp.status_code == 200
     body = json.loads(resp.get_body())
-    assert body["count"] >= 1
+    assert resp.status_code == 200 and body["count"] >= 1
     assert body["results"][0]["url"]
 
 
-def test_search_invalid_directory_defaults(monkeypatch, sample_docs):
+def test_search_source_filter(monkeypatch, sample_docs):
     _mock_engine(monkeypatch, sample_docs)
     resp = HANDLERS["search_directories"](
-        _req(params={"query": "asthma", "directory": "bogus"}))
+        _req(method="POST", body=json.dumps({"query": "asthma", "directory": "ihcc"}).encode()))
     body = json.loads(resp.get_body())
-    assert body["directory"] == "both"  # normalized default
+    assert all(r["source"] == "ihcc" for r in body["results"])
 
 
 def test_search_top_clamped(monkeypatch, sample_docs):
     _mock_engine(monkeypatch, sample_docs)
-    resp = HANDLERS["search_directories"](
-        _req(params={"query": "asthma", "top": "0"}))
-    body = json.loads(resp.get_body())
-    assert len(body["results"]) == 1  # 0 clamped up to 1
+    resp = HANDLERS["search_directories"](_req(params={"query": "asthma", "top": "0"}))
+    assert len(json.loads(resp.get_body())["results"]) == 1
 
 
-def test_search_post_body(monkeypatch, sample_docs):
-    _mock_engine(monkeypatch, sample_docs)
-    resp = HANDLERS["search_directories"](
-        _req(method="POST", body=json.dumps({"query": "maternal", "directory": "project"}).encode()))
-    body = json.loads(resp.get_body())
-    assert all(r["source"] == "project" for r in body["results"])
-
-
-def test_search_engine_error_500(monkeypatch, sample_docs):
-    def boom():
+def test_search_engine_error_500(monkeypatch):
+    def boom(keys):
         raise RuntimeError("engine down")
     monkeypatch.setattr(fa, "_engine", boom)
-    resp = HANDLERS["search_directories"](_req(params={"query": "asthma"}))
-    assert resp.status_code == 500
+    assert HANDLERS["search_directories"](_req(params={"query": "asthma"})).status_code == 500
 
 
 # ------------------------------------------------------------------- health
 
-def test_health_counts(monkeypatch, sample_docs):
-    _mock_engine(monkeypatch, sample_docs)
-    fa._SOURCE = "blob"
+def test_health_enumerates_all_datasets(monkeypatch):
+    manifest = {"total": 396, "datasets": [
+        {"key": "publication", "name": "Publication", "classification": "public", "count": 87},
+        {"key": "ihcc", "name": "Cohort", "classification": "restricted", "count": 309}]}
+    monkeypatch.setattr(fa.storage, "download_manifest",
+                        lambda: json.dumps(manifest).encode())
     resp = HANDLERS["health"](_req())
     body = json.loads(resp.get_body())
-    assert body["status"] == "ok"
-    assert body["records"] == 3
-    assert body["counts"]["publication"] == 1
+    assert body["status"] == "ok" and body["total"] == 396
+    keys = {d["key"] for d in body["datasets"]}
+    assert keys == {"publication", "ihcc"}  # restricted dataset IS enumerated
+    ihcc = [d for d in body["datasets"] if d["key"] == "ihcc"][0]
+    assert ihcc["classification"] == "restricted" and ihcc["count"] == 309
+
+
+def test_health_empty_when_no_manifest(monkeypatch):
+    monkeypatch.setattr(fa.storage, "download_manifest", lambda: None)
+    monkeypatch.setattr(fa, "_pkg_path", lambda name: "/nonexistent/" + name)
+    body = json.loads(HANDLERS["health"](_req()).get_body())
+    assert body["status"] == "ok" and body["datasets"] == []
 
 
 # ------------------------------------------------------------------- refresh
 
 def test_refresh_now_success(monkeypatch):
-    monkeypatch.setattr(fa, "rebuild_and_upload",
-                        lambda: {"records": 5, "counts": {}})
+    monkeypatch.setattr(fa, "rebuild_and_upload", lambda: {"records": 5})
     resp = HANDLERS["refresh_now"](_req(method="POST"))
     body = json.loads(resp.get_body())
     assert body["status"] == "refreshed" and body["records"] == 5
-    assert fa._DOCS is None  # cache invalidated
+    assert fa._index_cache == {} and fa._engine_cache == {}  # invalidated
 
 
 def test_refresh_now_error_500(monkeypatch):
     def boom():
         raise RuntimeError("refresh failed")
     monkeypatch.setattr(fa, "rebuild_and_upload", boom)
-    resp = HANDLERS["refresh_now"](_req(method="POST"))
-    assert resp.status_code == 500
+    assert HANDLERS["refresh_now"](_req(method="POST")).status_code == 500
+
+
+def test_refresh_timer_runs_and_swallows_errors(monkeypatch):
+    import types as _t
+    called = {}
+    monkeypatch.setattr(fa, "rebuild_and_upload", lambda: called.setdefault("ok", True) or {})
+    HANDLERS["refresh_timer"](_t.SimpleNamespace(past_due=True))
+    assert called.get("ok")
+
+    def boom():
+        raise RuntimeError("scheduled fail")
+    monkeypatch.setattr(fa, "rebuild_and_upload", boom)
+    HANDLERS["refresh_timer"](_t.SimpleNamespace(past_due=False))  # must not raise
+
+
+def test_search_malformed_post_body_400(monkeypatch, sample_docs):
+    _mock_engine(monkeypatch, sample_docs)
+    resp = HANDLERS["search_directories"](_req(method="POST", body=b"not json"))
+    assert resp.status_code == 400  # unparseable body -> no query -> 400
 
 
 # ------------------------------------------------------------------- _engine
 
-def test_engine_loads_from_blob(monkeypatch, sample_docs):
-    raw = search_core.build_artifact_bytes(sample_docs)[0]
-    monkeypatch.setattr(fa.storage, "download_corpus", lambda: (raw, "etag1"))
-    docs, _ = fa._engine()
-    assert len(docs) == 3 and fa._SOURCE == "blob" and fa._ETAG == "etag1"
+def _artifacts_by_key(sample_docs):
+    by_key = {}
+    for d in sample_docs:
+        by_key.setdefault(d["source"], []).append(d)
+    return {k: (search_core.build_artifact_bytes(v)[0], f"etag-{k}")
+            for k, v in by_key.items()}
 
 
-def test_engine_falls_back_to_package(monkeypatch, sample_docs):
-    monkeypatch.setattr(fa.storage, "download_corpus", lambda: (None, None))
-    monkeypatch.setattr(fa, "load_engine", lambda path: (["x"], object()))
-    docs, _ = fa._engine()
-    assert docs == ["x"] and fa._SOURCE == "package"
+def test_engine_merges_entitled_indexes(monkeypatch, sample_docs):
+    arts = _artifacts_by_key(sample_docs)
+    monkeypatch.setattr(fa.storage, "download_index", lambda k: arts.get(k, (None, None)))
+    docs, bm25 = fa._engine(["publication", "ihcc"])
+    sources = {d["source"] for d in docs}
+    assert sources == {"publication", "ihcc"}  # project excluded (not requested)
+    assert bm25 is not None
+
+
+def test_engine_caches_by_signature(monkeypatch, sample_docs):
+    arts = _artifacts_by_key(sample_docs)
+    monkeypatch.setattr(fa.storage, "download_index", lambda k: arts.get(k, (None, None)))
+    fa._engine(["publication", "ihcc"])
+    assert ("ihcc", "publication") in fa._engine_cache
 
 
 def test_engine_hot_reloads_on_etag_change(monkeypatch, sample_docs):
-    raw = search_core.build_artifact_bytes(sample_docs)[0]
-    fa._DOCS, fa._BM25 = ["old"], object()
-    fa._ETAG, fa._SOURCE, fa._LAST_CHECK = "old", "blob", 0.0
-    monkeypatch.setattr(fa.storage, "get_corpus_etag", lambda: "new")
-    monkeypatch.setattr(fa.storage, "download_corpus", lambda: (raw, "new"))
-    docs, _ = fa._engine()
-    assert fa._ETAG == "new" and len(docs) == 3
+    arts = _artifacts_by_key(sample_docs)
+    monkeypatch.setattr(fa.storage, "download_index", lambda k: arts.get(k, (None, None)))
+    fa._engine(["publication"])
+    # a new refresh changes the etag; force the throttled check to run
+    arts["publication"] = (arts["publication"][0], "etag-NEW")
+    monkeypatch.setattr(fa.storage, "get_index_etag", lambda k: arts[k][1])
+    fa._LAST_CHECK = 0.0
+    fa._engine(["publication"])
+    assert fa._index_cache["publication"]["etag"] == "etag-NEW"
 
 
-def test_engine_staleness_check_tolerates_errors(monkeypatch):
-    fa._DOCS, fa._BM25 = ["keep"], object()
-    fa._ETAG, fa._SOURCE, fa._LAST_CHECK = "e", "blob", 0.0
-
-    def boom():
-        raise RuntimeError("etag check down")
-    monkeypatch.setattr(fa.storage, "get_corpus_etag", boom)
-    docs, _ = fa._engine()
-    assert docs == ["keep"]  # kept current data, no crash
+def test_engine_packaged_fallback(monkeypatch, tmp_path, sample_docs):
+    art = search_core.build_artifact_bytes([sample_docs[0]])[0]
+    p = tmp_path / "publication.pkl"
+    p.write_bytes(art)
+    monkeypatch.setattr(fa.storage, "download_index", lambda k: (None, None))
+    monkeypatch.setattr(fa, "_pkg_path", lambda name: str(tmp_path / name))
+    docs, bm25 = fa._engine(["publication"])
+    assert len(docs) == 1 and fa._index_cache["publication"]["etag"] is None

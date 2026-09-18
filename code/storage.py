@@ -100,3 +100,54 @@ def download_blob(name: str):
         return bc.download_blob().readall()
     except Exception:
         return None
+
+
+def download_blob_with_etag(name: str):
+    """Return (bytes, etag) for a named blob, or (None, None) if absent."""
+    try:
+        bc = _service().get_container_client(CONTAINER).get_blob_client(name)
+        stream = bc.download_blob()
+        return stream.readall(), stream.properties.etag
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def get_blob_etag(name: str):
+    """Return a named blob's ETag, or None if it doesn't exist."""
+    try:
+        bc = _service().get_container_client(CONTAINER).get_blob_client(name)
+        return bc.get_blob_properties().etag
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ------------------------------------------------- per-dataset indexes + manifest
+
+INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "index/")
+MANIFEST_BLOB = os.environ.get("MANIFEST_BLOB", "index/manifest.json")
+
+
+def index_blob(key: str) -> str:
+    return f"{INDEX_PREFIX}{key}.pkl"
+
+
+def upload_index(key: str, data: bytes) -> str:
+    """Upload one dataset's index artifact. Returns ETag."""
+    return upload_blob(index_blob(key), data)
+
+
+def download_index(key: str):
+    """Return (bytes, etag) for a dataset's index, or (None, None) if absent."""
+    return download_blob_with_etag(index_blob(key))
+
+
+def get_index_etag(key: str):
+    return get_blob_etag(index_blob(key))
+
+
+def upload_manifest(data: bytes) -> str:
+    return upload_blob(MANIFEST_BLOB, data)
+
+
+def download_manifest():
+    return download_blob(MANIFEST_BLOB)

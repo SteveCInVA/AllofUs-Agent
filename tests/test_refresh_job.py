@@ -1,7 +1,6 @@
-"""Tests for refresh_job.rebuild_and_upload (feeds + storage mocked)."""
+"""Tests for refresh_job.rebuild_and_upload (per-dataset indexes, mocked storage)."""
+import json
 import types
-
-import pytest
 
 import refresh_job
 import search_core
@@ -13,52 +12,70 @@ def _doc(source, i):
             "snippet": "s", "_body": f"{source} body text {i}"}
 
 
-def _patch(monkeypatch, sources, resilient, upload=None, prev=None):
-    monkeypatch.setattr(refresh_job, "get_enabled_sources",
-                        lambda: [types.SimpleNamespace(key=k) for k in sources])
+def _src(key, classification="public"):
+    return types.SimpleNamespace(key=key, label=key.title(), classification=classification)
+
+
+def _patch(monkeypatch, sources, resilient, uploaded_idx, uploaded_manifest,
+           prev_index=None):
+    monkeypatch.setattr(refresh_job, "get_enabled_sources", lambda: sources)
     monkeypatch.setattr(refresh_job.feeds, "load_source_resilient",
                         lambda src: resilient[src.key])
-    up = upload if upload is not None else {}
-    monkeypatch.setattr(refresh_job.storage, "upload_corpus",
-                        lambda data: up.setdefault("etag", "etag123") or "etag123")
-    monkeypatch.setattr(refresh_job, "_previous_artifact", lambda: prev)
-    return up
+    monkeypatch.setattr(refresh_job.storage, "upload_index",
+                        lambda key, data: uploaded_idx.update({key: data}) or "etag")
+    monkeypatch.setattr(refresh_job.storage, "download_index",
+                        lambda key: ((prev_index or {}).get(key), "etag")
+                        if (prev_index or {}).get(key) else (None, None))
+    monkeypatch.setattr(refresh_job.storage, "upload_manifest",
+                        lambda data: uploaded_manifest.append(json.loads(data)) or "etag")
 
 
-def test_all_live(monkeypatch):
-    resilient = {"a": ([_doc("a", 1)], "live"),
-                 "b": ([_doc("b", 1), _doc("b", 2)], "live")}
-    _patch(monkeypatch, ["a", "b"], resilient)
+def test_all_live_builds_per_dataset_indexes(monkeypatch):
+    idx, man = {}, []
+    resilient = {"publication": ([_doc("publication", 1)], "live"),
+                 "ihcc": ([_doc("ihcc", 1), _doc("ihcc", 2)], "live")}
+    _patch(monkeypatch, [_src("publication"), _src("ihcc", "restricted")],
+           resilient, idx, man)
     summary = refresh_job.rebuild_and_upload()
+    assert set(idx) == {"publication", "ihcc"}      # one index blob per dataset
     assert summary["records"] == 3
-    assert summary["counts"] == {"a": 1, "b": 2}
-    assert summary["sources"] == {"a": "live", "b": "live"}
-    assert "status" not in summary  # not degraded
+    assert summary["datasets"] == {"publication": 1, "ihcc": 2}
+    assert summary["sources"] == {"publication": "live", "ihcc": "live"}
+    # manifest enumerates datasets with name + count + classification
+    m = man[-1]
+    assert m["total"] == 3
+    ihcc = [d for d in m["datasets"] if d["key"] == "ihcc"][0]
+    assert ihcc["name"] == "Ihcc" and ihcc["count"] == 2 and ihcc["classification"] == "restricted"
 
 
-def test_degraded_when_source_uses_cache(monkeypatch):
-    resilient = {"a": ([_doc("a", 1)], "live"),
-                 "b": ([_doc("b", 1)], "cache")}
-    _patch(monkeypatch, ["a", "b"], resilient)
+def test_degraded_on_cache(monkeypatch):
+    idx, man = {}, []
+    resilient = {"publication": ([_doc("publication", 1)], "live"),
+                 "ihcc": ([_doc("ihcc", 1)], "cache")}
+    _patch(monkeypatch, [_src("publication"), _src("ihcc")], resilient, idx, man)
     summary = refresh_job.rebuild_and_upload()
     assert summary["status"] == "degraded"
-    assert any("b used cache" in w for w in summary["warnings"])
+    assert any("ihcc used cache" in w for w in summary["warnings"])
 
 
-def test_carry_forward_when_failed(monkeypatch):
-    # 'b' fails with no cache; previous corpus still has a 'b' record to carry.
-    prev, _ = search_core.build_artifact_bytes([_doc("b", 99)])
-    resilient = {"a": ([_doc("a", 1)], "live"),
-                 "b": (None, "failed")}
-    _patch(monkeypatch, ["a", "b"], resilient, prev=prev)
+def test_carry_previous_index_when_failed(monkeypatch):
+    idx, man = {}, []
+    prev_bytes, _ = search_core.build_artifact_bytes([_doc("ihcc", 9)])
+    resilient = {"publication": ([_doc("publication", 1)], "live"),
+                 "ihcc": (None, "failed")}
+    _patch(monkeypatch, [_src("publication"), _src("ihcc")], resilient, idx, man,
+           prev_index={"ihcc": prev_bytes})
     summary = refresh_job.rebuild_and_upload()
-    assert summary["counts"]["b"] == 1, "carried record should count"
-    assert summary["sources"]["b"] == "carried"
-    assert summary["status"] == "degraded"
+    assert summary["datasets"]["ihcc"] == 1        # carried count preserved
+    assert summary["sources"]["ihcc"] == "carried"
+    assert "ihcc" not in idx                        # not re-uploaded
 
 
-def test_raises_when_no_data_anywhere(monkeypatch):
-    resilient = {"a": (None, "failed")}
-    _patch(monkeypatch, ["a"], resilient, prev=None)
-    with pytest.raises(RuntimeError):
-        refresh_job.rebuild_and_upload()
+def test_failed_with_no_previous(monkeypatch):
+    idx, man = {}, []
+    resilient = {"ihcc": (None, "failed")}
+    _patch(monkeypatch, [_src("ihcc")], resilient, idx, man)
+    summary = refresh_job.rebuild_and_upload()
+    assert summary["datasets"]["ihcc"] == 0
+    assert summary["sources"]["ihcc"] == "failed"
+    assert man[-1]["total"] == 0                    # manifest still written

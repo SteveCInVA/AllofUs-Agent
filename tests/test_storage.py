@@ -79,6 +79,8 @@ class _FakeBlob:
         return _Stream()
 
     def get_blob_properties(self):
+        if self.name not in self.store:
+            raise KeyError(self.name)
         return type("P", (), {"etag": "etag-xyz"})()
 
 
@@ -131,3 +133,23 @@ def test_upload_download_named_blob(fake_store):
 
 def test_download_blob_missing_returns_none(fake_store):
     assert storage.download_blob("nope.json") is None
+
+
+def test_index_roundtrip(fake_store):
+    etag = storage.upload_index("ihcc", b"indexbytes")
+    assert etag == "etag-xyz"
+    data, etag2 = storage.download_index("ihcc")
+    assert data == b"indexbytes" and etag2 == "etag-xyz"
+    assert storage.get_index_etag("ihcc") == "etag-xyz"
+    # stored under the index/ prefix
+    assert storage.index_blob("ihcc") == "index/ihcc.pkl"
+
+
+def test_index_missing_returns_none(fake_store):
+    assert storage.download_index("nope") == (None, None)
+    assert storage.get_index_etag("nope") is None
+
+
+def test_manifest_roundtrip(fake_store):
+    storage.upload_manifest(b'{"total":3}')
+    assert storage.download_manifest() == b'{"total":3}'

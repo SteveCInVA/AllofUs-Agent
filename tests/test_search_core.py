@@ -67,6 +67,32 @@ def test_build_artifact_to_disk(tmp_path, sample_docs):
     assert n == len(sample_docs) and out.exists()
 
 
+def test_load_artifact_returns_docs_and_tokens(sample_docs):
+    raw, _ = sc.build_artifact_bytes(sample_docs)
+    docs, tokens = sc.load_artifact(raw)
+    assert len(docs) == len(tokens) == len(sample_docs)
+    assert all("_body" not in d for d in docs)
+
+
+def test_build_engine_merges_parts(sample_docs):
+    raw, _ = sc.build_artifact_bytes(sample_docs)
+    docs, tokens = sc.load_artifact(raw)
+    # split into two parts and merge
+    part1 = (docs[:1], tokens[:1])
+    part2 = (docs[1:], tokens[1:])
+    merged_docs, bm25 = sc.build_engine([part1, part2])
+    assert len(merged_docs) == len(sample_docs) and bm25 is not None
+
+
+def test_build_engine_empty_yields_none_bm25():
+    docs, bm25 = sc.build_engine([])
+    assert docs == [] and bm25 is None
+
+
+def test_search_empty_engine_returns_empty():
+    assert sc.search([], None, "anything", "all", 8) == []
+
+
 # ---------------------------------------------------------------- filter resolve
 
 @pytest.mark.parametrize("value,expected", [

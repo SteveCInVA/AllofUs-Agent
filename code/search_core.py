@@ -88,6 +88,27 @@ def load_engine_from_bytes(data_bytes):
     return data["docs"], bm25
 
 
+def load_artifact(data_bytes):
+    """Return (docs, tokens) from a pickled artifact WITHOUT building BM25.
+
+    Used to hold per-dataset index contents so a merged engine can be built across
+    several datasets on demand.
+    """
+    data = pickle.loads(data_bytes)
+    return data["docs"], data["tokens"]
+
+
+def build_engine(parts):
+    """Build a merged (docs, bm25) engine from parts = [(docs, tokens), ...]."""
+    from rank_bm25 import BM25Okapi
+    docs, tokens = [], []
+    for d, t in parts:
+        docs += d
+        tokens += t
+    bm25 = BM25Okapi(tokens) if tokens else None
+    return docs, bm25
+
+
 def load_engine(path):
     """Load the artifact from disk and (re)build the BM25 model at cold start."""
     with open(path, "rb") as fh:
@@ -113,6 +134,8 @@ def search(docs, bm25, query, directory="both", top=8):
     "both"/"all" for no filter.
     """
     want = resolve_filter(directory)
+    if bm25 is None or not docs:
+        return []
     scores = bm25.get_scores(tokenize(query))
     order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     results = []

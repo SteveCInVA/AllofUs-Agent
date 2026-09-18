@@ -1,15 +1,20 @@
 """
-Refresh job: ingest every registered source, rebuild the corpus snapshot, and
-upload it to Blob Storage. Called by the timer trigger and the on-demand HTTP
-endpoint in function_app.py.
+Refresh job: ingest every registered source, build a per-dataset search index, and
+upload each to Blob Storage along with a manifest. Called by the timer trigger and
+the on-demand HTTP endpoint in function_app.py.
 
-Resilience: each source is ingested independently. A source that fails live
-falls back to its cached normalized docs; if even that is missing, its records
-are carried over from the previous corpus snapshot. The refresh only raises when
-NO source yields any data anywhere.
+Per-dataset design: each dataset gets its own index blob (`index/<key>.pkl`) so the
+Function can load only the indexes a caller is entitled to. A single source being
+unavailable degrades gracefully — its previous index blob is left in place (carried).
+A manifest (`index/manifest.json`) lists every dataset with its name and record
+count for the /health endpoint.
+
+Resilience order per source: live fetch+normalize (cached to its per-source docs
+blob) -> per-source docs cache -> keep the previous per-dataset index blob.
 """
+import datetime
+import json
 import logging
-import os
 import time
 
 import feeds
@@ -18,71 +23,57 @@ import storage
 from sources import get_enabled_sources
 
 
-def _previous_artifact():
-    """Bytes of the current corpus snapshot: blob first, else the packaged file."""
-    data, _ = storage.download_corpus()
-    if data:
-        return data
-    path = os.path.join(os.path.dirname(__file__), "corpus.pkl")
-    if os.path.exists(path):
-        with open(path, "rb") as fh:
-            return fh.read()
-    return None
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 def rebuild_and_upload():
-    """Ingest all sources → build snapshot → upload to blob. Returns a summary."""
+    """Ingest all sources -> per-dataset indexes + manifest. Returns a summary."""
     started = time.time()
     sources = get_enabled_sources()
-    logging.info("Refresh: ingesting %d sources…", len(sources))
+    logging.info("Refresh: ingesting %d sources into per-dataset indexes…", len(sources))
 
-    all_docs = []
-    carried_docs, carried_tokens = [], []
+    manifest = {"total": 0, "datasets": []}
     statuses = {}
-    prev = None
 
     for src in sources:
         docs, status = feeds.load_source_resilient(src)
+        count = 0
         if docs is None:
-            # Last resort: carry this source's records from the previous snapshot.
-            if prev is None:
-                prev = _previous_artifact()
+            # Keep the previous index blob for this dataset (carry it forward).
+            prev, _ = storage.download_index(src.key)
             if prev:
-                d, t = search_core.carry_source(prev, src.key)
-                if d:
-                    carried_docs += d
-                    carried_tokens += t
+                try:
+                    slim, _tokens = search_core.load_artifact(prev)
+                    count = len(slim)
                     status = "carried"
-            statuses[src.key] = status
-            continue
-        all_docs += docs
+                except Exception:  # noqa: BLE001
+                    logging.exception("Could not read previous index for %s", src.key)
+                    status = "failed"
+            else:
+                status = "failed"
+        else:
+            data, count = search_core.build_artifact_bytes(docs)
+            storage.upload_index(src.key, data)
+
         statuses[src.key] = status
+        manifest["total"] += count
+        manifest["datasets"].append({
+            "key": src.key,
+            "name": src.label,
+            "classification": getattr(src, "classification", "public"),
+            "count": count,
+            "status": status,
+            "updated_at": _now_iso(),
+        })
 
-    if not (all_docs or carried_docs):
-        raise RuntimeError(f"No data available from any source: {statuses}")
+    storage.upload_manifest(json.dumps(manifest).encode("utf-8"))
 
-    logging.info("Refresh: building snapshot (%d live/cache docs, %d carried)…",
-                 len(all_docs), len(carried_docs))
-    data, n = search_core.build_artifact_bytes(all_docs, carried_docs, carried_tokens)
-
-    logging.info("Refresh: uploading %d bytes to blob…", len(data))
-    etag = storage.upload_corpus(data)
-
-    counts = {}
-    for d in all_docs:
-        counts[d.get("source")] = counts.get(d.get("source"), 0) + 1
-    for d in carried_docs:
-        counts[d.get("source")] = counts.get(d.get("source"), 0) + 1
-
-    warnings = [f"{key} used {status} data"
-                for key, status in statuses.items() if status != "live"]
-
+    warnings = [f"{k} used {v} data" for k, v in statuses.items() if v != "live"]
     summary = {
-        "records": n,
-        "counts": counts,
+        "records": manifest["total"],
+        "datasets": {d["key"]: d["count"] for d in manifest["datasets"]},
         "sources": statuses,
-        "bytes": len(data),
-        "etag": etag,
         "seconds": round(time.time() - started, 1),
     }
     if warnings:
