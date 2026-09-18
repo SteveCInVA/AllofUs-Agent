@@ -1,7 +1,7 @@
 # Authentication & Authorization Design
 
 **Status: Implemented** (branch `feature/multi-source`). This is the design of record
-for authentication and authorization; the as-built details and operator cutover are
+for authentication and authorization; the as-built details and operator setup are
 in [`security-hardening.md`](security-hardening.md).
 
 ## 1. Requirement
@@ -117,13 +117,13 @@ flowchart TB
 ## 9. Where it lives in the code
 | Area | Implementation |
 |---|---|
-| `code/function_app.py` | claims parse + base-group check on `/search`, `Agent.Admin` on `/refresh`, per-request entitled-index selection; routes flip to `ANONYMOUS` at cutover |
+| `code/function_app.py` | claims parse + base-group check on `/search`, `Agent.Admin` on `/refresh`, per-request entitled-index selection; routes are `ANONYMOUS` (Easy Auth gates) |
 | `code/auth.py` | parse `X-MS-CLIENT-PRINCIPAL`; `has_base`, `is_admin`, `entitled_keys` |
 | `code/source_base.py`, `sources.py` | `classification`, `entitlement_group_id`, `index_blob`; applied from `DATASET_CLASSIFICATION` |
 | `code/refresh_job.py`, `storage.py` | per-dataset index blobs + manifest |
 | `code/search_core.py` | merged engine over the entitled index set |
-| `custom_connector/openapi-swagger-oauth2.yaml` | OAuth 2.0 (Entra, delegated) connector |
-| `deployment/deploy_entra_auth.ps1` | app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault, GCC authorities |
+| `custom_connector/openapi-swagger.yaml` | OAuth 2.0 (Entra, delegated) connector |
+| `deployment/deploy_azure_infrastructure.ps1` | greenfield: infra + app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault, GCC authorities |
 | `tests/` | authorization + trimming tests (entitled vs unentitled; admin vs non-admin refresh; anonymous health) |
 
 ## 10. Service principal — where it lands
@@ -135,8 +135,9 @@ Use gov-cloud authorities (`login.microsoftonline.us`, `*.azurewebsites.us`), cr
 the app registrations/groups in the **customer GCC tenant**, and parameterize the
 IaC/connector accordingly.
 
-## 12. Rollout & rollback
-The code shipped behind the `AUTH_ENFORCED` flag (default `false` = prior behavior),
-so enforcement is turned on only after the Entra objects and OAuth2 connector are in
-place. See [`security-hardening.md`](security-hardening.md) for the operator setup and
-cutover steps. **Rollback:** set `AUTH_ENFORCED=false` and re-enable function keys.
+## 12. Rollout & local dev
+The greenfield deployment provisions the Entra objects, Easy Auth, and app settings
+and enforces authorization from day one (`AUTH_ENFORCED=true`). The flag exists so the
+code can also run without Easy Auth for **local development** (`local.settings.json`
+sets it `false`). See [`security-hardening.md`](security-hardening.md) for the operator
+setup steps.

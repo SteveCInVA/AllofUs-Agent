@@ -3,7 +3,7 @@
 **Status: Implemented** on branch `feature/multi-source`. This describes how the
 authorization and per-dataset access controls work in the code today. The design
 rationale is in [`auth-design.md`](auth-design.md); the remaining work is operator
-setup (Entra objects) and the cutover, both at the end of this document.
+setup (assigning users to groups and loading data), at the end of this document.
 
 ## Overview
 
@@ -16,10 +16,12 @@ which the code maps to entitlements from the caller's group/role claims:
   (`AoU-DS-IHCC`, `AoU-DS-CCDI`). Compartments are independent (IHCC ≠ CCDI).
 - `/refresh` requires the **`Agent.Admin`** app role. `/health` is anonymous.
 
-Enforcement is gated by the **`AUTH_ENFORCED`** app setting. While `false` (the
-current default) the app keeps its prior behavior (function-key auth, all datasets
-visible), so the code shipped safely before Entra/Easy Auth were stood up. Setting
-it `true` turns on the claims-based checks below.
+Enforcement is gated by the **`AUTH_ENFORCED`** app setting, which the greenfield
+deployment sets to `true` — identity and entitlements are enforced from day one.
+The flag exists so the code can also run without Easy Auth for **local development**
+(`local.settings.json` sets it `false`, making all datasets visible locally); deployed
+environments always enforce. Function routes are `ANONYMOUS` at the Functions layer —
+Easy Auth is the platform gate and the code enforces the claims-based checks below.
 
 ## How it works (as-built)
 
@@ -75,7 +77,7 @@ entitlements. Checks fail closed and only apply when `AUTH_ENFORCED=true`.
 ### App settings
 | Setting | Purpose |
 |---|---|
-| `AUTH_ENFORCED` | `true` enables claims checks (default `false`) |
+| `AUTH_ENFORCED` | `true` enables claims checks (set `true` by the deployment; `false` only for local dev) |
 | `BASE_ENTITLEMENT_GROUP_ID` | Entra object id of `AoU-Agent-Users` |
 | `ADMIN_ROLE` | app role for refresh (default `Agent.Admin`) |
 | `DATASET_CLASSIFICATION` | JSON map of per-dataset classification + group ids |
@@ -86,16 +88,18 @@ config-driven classification, and the full authorization matrix (401 unauth, 403
 base group, base-user = public only, IHCC-entitled adds IHCC not CCDI, admin-gated
 refresh). Suite: 107 tests, ~94% coverage.
 
-## Remaining operator setup + cutover
-The application code is complete; going live requires tenant/deploy actions:
+## Operator setup (after the greenfield deployment)
+The greenfield [`../deployment/deploy_azure_infrastructure.ps1`](../deployment/deploy_azure_infrastructure.ps1)
+stands everything up in one run — the API + client app registrations, the groups
+(`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, **Easy Auth**
+(Return 401 with `/api/health` excluded), a **Key Vault** for the connector secret,
+and the auth app settings (with `AUTH_ENFORCED=true`). After it runs and the code is
+published:
 
-1. Run [`../deployment/deploy_entra_auth.ps1`](../deployment/deploy_entra_auth.ps1) to
-   create the API + client app registrations, the groups (`AoU-Agent-Users`,
-   `AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, filtered group-claims token
-   config, **Easy Auth** (Return 401 with `/api/health` excluded), a **Key Vault** for
-   the connector secret, and the auth app settings. It leaves `AUTH_ENFORCED=false`.
-2. **Cutover:** import the OAuth2 connector
-   (`../custom_connector/openapi-swagger-oauth2.yaml`), set `AUTH_ENFORCED=true`,
-   verify entitlements, switch the `/search` and `/refresh` route auth levels to
-   `ANONYMOUS` (Easy Auth now gates), then disable the function keys.
-3. **Rollback:** set `AUTH_ENFORCED=false` and re-enable function keys.
+1. **Assign users** to `AoU-Agent-Users` (base) and to `AoU-DS-IHCC` / `AoU-DS-CCDI`
+   as needed; grant the `Agent.Admin` app role to admins.
+2. **Load data:** POST `/api/refresh` with an admin's Entra bearer token, or wait for
+   the daily timer. Public datasets are already available from the packaged indexes;
+   restricted datasets appear after the first refresh.
+3. **Import the connector** (`../custom_connector/openapi-swagger.yaml`, delegated
+   Entra OAuth 2.0) in Copilot Studio using the client app id + the Key Vault secret.

@@ -24,7 +24,7 @@ The deployment code assumes:
 ## Cloud selection & pre-deployment confirmations
 
 This solution deploys to **Azure Commercial** or **Azure Government (GCC)**, selected
-by the `$cloud` variable at the top of `deploy_azure_infrastructure.txt`
+by the `$cloud` variable at the top of `deploy_azure_infrastructure.ps1`
 (`AzureCloud` or `AzureUSGovernment`). All cloud-specific endpoints (storage suffix,
 private-link DNS zones, portal/CORS, Entra authority, region) are derived from that
 one variable.
@@ -50,7 +50,7 @@ one variable.
 ### Azure Function
 
 #### Deployment Variables
-The following varaiables are defined in the top of the deploy_azure_infrastructure.txt file.  They represent the following configurations:
+The following varaiables are defined in the top of the deploy_azure_infrastructure.ps1 file.  They represent the following configurations:
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
@@ -69,7 +69,7 @@ The following varaiables are defined in the top of the deploy_azure_infrastructu
 
 #### Infrastructure Deployment Process
 
-The code used to deploy the infrastructure can be found in /deployment/deploy_azure_infrastructure.txt
+The code used to deploy the infrastructure can be found in /deployment/deploy_azure_infrastructure.ps1
 
 Deployment will perform the following:
 - Create a new resource group
@@ -123,17 +123,17 @@ After deploy, trigger a refresh (or wait for the daily 03:00 UTC timer) to build
 every dataset's index in Blob Storage:
 
 ```
-# POST /api/refresh  (see /deployment/testing_azure_functions.txt)
+# POST /api/refresh  (see /deployment/testing_azure_functions.ps1)
 ```
 
 When successfully deployed user will see the deployed functions and the URL associated to each.
 
 #### Testing
 
-Testing scrips can be found in /deployment/testing_azure_functions.txt
+Testing scrips can be found in /deployment/testing_azure_functions.ps1
 
 ##### Testing Variables
-The following parameters are defined in the /deployment/testing_azure_functions.txt file
+The following parameters are defined in the /deployment/testing_azure_functions.ps1 file
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
@@ -147,15 +147,17 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 - Refresh - rebuilds each dataset's index and the manifest; a source that is temporarily unavailable keeps its previous index (never blanked). Requires the Admin role when `AUTH_ENFORCED=true`
 - Search - Executes a basic query and displays results (trimmed to the caller's entitled datasets when `AUTH_ENFORCED=true`)
 
-## Authentication & Authorization (security hardening)
+## Authentication & Authorization
 
-The service supports per-user, entitlement-based access. Design details are in
+The service uses per-user, entitlement-based access, provisioned by the greenfield
+deployment and **enforced from day one**. Design details are in
 [`docs/auth-design.md`](docs/auth-design.md) and
 [`docs/security-hardening.md`](docs/security-hardening.md).
 
 **Model**
 - **Delegated Microsoft Entra sign-in** (the user's identity flows to the Function via
-  App Service Authentication / "Easy Auth").
+  App Service Authentication / "Easy Auth"). Function routes are anonymous at the
+  Functions layer; Easy Auth is the gate and the code enforces entitlements.
 - **Datasets are entitlements.** `publication`/`project` are public (gated by the base
   group `AoU-Agent-Users`); `ihcc`/`ccdi` are restricted, each requiring its own Entra
   group (`AoU-DS-IHCC`, `AoU-DS-CCDI`). Classification is driven by the
@@ -164,32 +166,33 @@ The service supports per-user, entitlement-based access. Design details are in
   `/refresh` requires the **`Agent.Admin`** app role. `/health` is anonymous and
   enumerates every dataset with name + count.
 
-**Feature flag — `AUTH_ENFORCED`.** When `false` (default), the app behaves as before
-(function-key auth, all datasets visible) so the code can ship before Entra is live.
-When `true`, the claims-based checks above are enforced.
+The deployment sets `AUTH_ENFORCED=true`. (The flag exists so the code can run without
+Easy Auth for **local development** — `local.settings.json` sets it `false` — but
+deployed environments always enforce.)
 
-**Setup**
-1. Deploy infrastructure (`deploy_azure_infrastructure.txt`).
-2. Run [`deployment/deploy_entra_auth.txt`](deployment/deploy_entra_auth.txt) to create the
-   API + client app registrations, the groups, the `Agent.Admin` role, Easy Auth
-   (with `/api/health` excluded), a Key Vault for the connector secret, and the auth
-   app settings. It leaves `AUTH_ENFORCED=false`.
-3. **Cutover:** import the OAuth2 connector
-   (`custom_connector/openapi-swagger-oauth2.yaml`), set `AUTH_ENFORCED=true`, verify
-   entitlements, switch the `/search` and `/refresh` route auth levels to `ANONYMOUS`
-   (Easy Auth now gates), then disable the function keys.
+**Setup** — all of this is done by `deploy_azure_infrastructure.ps1` in one run:
+creates the API + client app registrations, the groups (`AoU-Agent-Users`,
+`AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, Easy Auth (with `/api/health`
+excluded), a Key Vault for the connector secret, and the auth app settings. After it
+runs (and the code is published):
 
-**Rollback:** set `AUTH_ENFORCED=false` and re-enable function keys.
+1. **Assign users** to `AoU-Agent-Users` (base) and to `AoU-DS-IHCC` / `AoU-DS-CCDI`
+   as needed; grant the `Agent.Admin` app role to admins.
+2. **Load data:** POST `/api/refresh` with an Entra bearer token (an admin), or wait
+   for the daily 03:00 UTC timer. Public datasets are already available from the
+   packaged indexes; restricted datasets appear after the first refresh.
+3. **Import the connector** (`custom_connector/openapi-swagger.yaml`, delegated Entra
+   OAuth 2.0) in Copilot Studio and create the connection with the client app's ID +
+   the secret from Key Vault.
 
 ## Custom Connector (AKA Copilot Studio Tools)
-
-> Use `openapi-swagger.yaml` (function key) during the interim, or
-> `openapi-swagger-oauth2.yaml` (delegated Entra) at/after the security cutover.
 
 
 1. Open the /custom_connector/openapi-swagger.yaml file.
 
 1. Replace the values found in:  host: <functionServiceURL>.azurewebsites.net with the correct URL deployed in prior section.
+
+1. Also fill in the OAuth 2.0 placeholders in the file (`<TENANT-ID>`, `<API-APP-ID>`) with the tenant and API app registration id from the deployment output.
 
 1. Naviate to https://copilotstudio.microsoft.com
 
@@ -202,9 +205,11 @@ Provide the connector name and the /custom_connector/openapi-swagger.yaml file
     
     - Optional: After importing the openapi-swagger.yaml file, configure the connector icon available in /custom_connector/icons
 
+1. On the **Security** tab, confirm **OAuth 2.0 / Azure Active Directory** and enter the **Client ID** of the `AllOfUs-Function-Client` app registration, the **Client Secret** (from Key Vault `connector-client-secret`), the **Tenant ID**, and Resource/Scope `api://<API-APP-ID>/access_as_user`.
+
 1. Click Update connector to save the custom connector.
 
-1. Click Test and create a new connection.  The API key can be found in the Azure Function under Functions > App keys > default
+1. Click Test and create a new connection.  Sign in with a user who is a member of `AoU-Agent-Users` (and any dataset groups you want to test).
 
 1. Select "childhood asthma" as the query, "all" for directory, 8 for top then click "Test operation"
 

@@ -28,7 +28,10 @@ import auth
 from refresh_job import rebuild_and_upload
 from sources import source_keys
 
-app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+# Routes are ANONYMOUS at the Functions layer; App Service Authentication ("Easy
+# Auth") gates access with an Entra token and the code enforces entitlements from
+# the caller's claims (see auth.py). /api/health is intentionally anonymous.
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 CHECK_INTERVAL = int(os.environ.get("CORPUS_CHECK_SECONDS", "300"))
 

@@ -8,10 +8,12 @@ venv/
 .python_packages/
 local.settings.json
 
+# Note: code/corpus.pkl is intentionally tracked (first-run fallback snapshot)
+code/index/*.pkl
+code/index/manifest.json
+
 # Test artifacts
 .pytest_cache/
 .coverage
 coverage.xml
 htmlcov/
-
-# Note: code/corpus.pkl is intentionally tracked (first-run fallback snapshot)

@@ -8,6 +8,7 @@ $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / G
 $rg  = "rg-allofus-demo01"
 $sfx = "aou1234"
 $app = "func-allofus-$sfx"
+$apiAppId = "<API-APP-ID>"     # AllOfUs-Function-API appId from the deployment output
 
 # Function hostname suffix per cloud (.azurewebsites.net commercial / .us government)
 $functionHostSuffix = if ($cloud -eq "AzureUSGovernment") { "azurewebsites.us" } else { "azurewebsites.net" }
@@ -17,29 +18,18 @@ $uri = "https://$app.$functionHostSuffix/api"
 az cloud set --name $cloud
 
 ##########################################
-# capture function keys for auth in header 
+# Auth: acquire a Microsoft Entra bearer token for the API app's scope.
+# The signed-in user must be in AoU-Agent-Users (base) for /search, and hold the
+# Agent.Admin role for /refresh. /api/health is anonymous (no header needed).
 ##########################################
-#
-# Function keys are used while AUTH_ENFORCED=false (the interim). After the security
-# cutover (AUTH_ENFORCED=true with Easy Auth), use a Microsoft Entra bearer token
-# instead of the function key — acquire one for the API app's scope and send it as
-# an Authorization header:
-#
-#   $token = az account get-access-token --resource "api://<API-APP-ID>" --query accessToken -o tsv
-#   $headers = @{ "Authorization" = "Bearer $token" }
-#
-# (/api/health stays anonymous and needs no header in either mode.)
 
-$key = az functionapp keys list `
-    --resource-group $rg `
-    --name $app `
-    --query "functionKeys.default" `
-    --output tsv
-
+$token = az account get-access-token --resource "api://$apiAppId" --query accessToken -o tsv
 $headers = @{
-    "x-functions-key" = $key
+    "Authorization" = "Bearer $token"
 }
 
+##########################################
+# Health (anonymous) — enumerates every dataset with name + record count
 ##########################################
 
 $health_uri = "$uri/health"
@@ -52,6 +42,8 @@ $response | ConvertTo-Json -Depth 10
 clear-variable -Name response
 
 ##########################################
+# Refresh (requires Agent.Admin)
+##########################################
 
 $refresh_uri = "$uri/refresh"
 
@@ -63,6 +55,8 @@ $response = Invoke-RestMethod `
 $response | ConvertTo-Json -Depth 10
 clear-variable -Name response
 
+##########################################
+# Search (requires AoU-Agent-Users; results limited to the caller's entitled datasets)
 ##########################################
 
 $search_uri = "$uri/search"
