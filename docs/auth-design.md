@@ -6,9 +6,10 @@ made by this document — it is the plan for the security-hardening work.
 ## 1. Requirement
 Access to datasets is entitlement-based and per user:
 - **Public** datasets: available to any authenticated user with the base entitlement.
-- **Restricted** datasets: each is an **independent compartment**. A user granted
-  restricted dataset *A* (e.g. "apples") must **not** see restricted dataset *B*
-  ("bananas"), and vice‑versa. Users may hold any combination.
+- **Restricted** datasets: each is an **independent compartment**. In this solution
+  the **IHCC** and **CCDI** datasets are restricted: a user granted the **IHCC**
+  entitlement must **not** see **CCDI** data, and vice‑versa. Users may hold any
+  combination (additional restricted datasets follow the same pattern).
 
 This is per-user, need-to-know authorization, so the **end user's identity must
 flow to the service** — an app-only service principal cannot satisfy it.
@@ -50,7 +51,8 @@ the entitled set. `Agent.Admin` app role gates HTTP refresh.
   to the API's `access_as_user` scope (connector uses this).
 - **Groups**
   - `AoU-Agent-Users` — base entitlement (public datasets + agent use).
-  - `AoU-DS-<name>` — one per **restricted** dataset (the compartment entitlement).
+  - `AoU-DS-<name>` — one per **restricted** dataset (currently `AoU-DS-IHCC` and
+    `AoU-DS-CCDI`).
 - Admin consent for the API scope; assign `Agent.Admin` to admins.
 
 ## 5. Authorization rules (enforced in the Function, after Easy Auth)
@@ -69,16 +71,17 @@ its entitlement group and index blob:
 
 ```jsonc
 {
-  "publication": { "classification": "public",    "index_blob": "index/publication.pkl" },
-  "project":     { "classification": "public",    "index_blob": "index/project.pkl" },
-  "ihcc":        { "classification": "public",    "index_blob": "index/ihcc.pkl" },
-  "ccdi":        { "classification": "public",    "index_blob": "index/ccdi.pkl" },
-  "apples":      { "classification": "restricted", "entitlement_group_id": "<guid>",
-                   "index_blob": "index/apples.pkl" },
-  "bananas":     { "classification": "restricted", "entitlement_group_id": "<guid>",
-                   "index_blob": "index/bananas.pkl" }
+  "publication": { "classification": "public",     "index_blob": "index/publication.pkl" },
+  "project":     { "classification": "public",     "index_blob": "index/project.pkl" },
+  "ihcc":        { "classification": "restricted", "entitlement_group_id": "<AoU-DS-IHCC guid>",
+                   "index_blob": "index/ihcc.pkl" },
+  "ccdi":        { "classification": "restricted", "entitlement_group_id": "<AoU-DS-CCDI guid>",
+                   "index_blob": "index/ccdi.pkl" }
 }
 ```
+Current classification: **publication** and **project** are public (gated by the base
+entitlement); **ihcc** and **ccdi** are restricted, each requiring its own group
+(`AoU-DS-IHCC`, `AoU-DS-CCDI`).
 The `Source` in the registry carries `classification`, `entitlement_group_id`, and
 its index blob name.
 

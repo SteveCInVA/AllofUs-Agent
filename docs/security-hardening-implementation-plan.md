@@ -50,7 +50,9 @@ been changed yet.**
 ## 3. Phased implementation
 
 ### Phase 1 — Per-dataset index refactor (foundation, no auth yet)
-Behavior stays identical (all datasets are `public` → everyone still sees all).
+Behavior stays identical while `AUTH_ENFORCED=false` — no entitlement checks yet, so
+every caller still sees all datasets. Classification (Phase 2) and enforcement
+(Phase 3) are what make ihcc/ccdi restricted.
 - `storage.py`: generalize corpus helpers to per-blob — `upload_index(key, bytes)`,
   `download_index(key) -> (bytes, etag)`, `get_index_etag(key)` (blob `index/<key>.pkl`).
   Keep the old corpus functions temporarily for rollback.
@@ -68,10 +70,14 @@ Behavior stays identical (all datasets are `public` → everyone still sees all)
 ### Phase 2 — Classification config on the Source model
 - `source_base.py`: add `classification` (`public`/`restricted`), `entitlement_group_id`,
   `index_blob` (default `index/<key>.pkl`).
-- `source_allofus/ihcc/ccdi`: mark `classification="public"`.
+- `source_allofus`: mark `classification="public"` (publication, project).
+- `source_ihcc`: mark `classification="restricted"` (entitlement group `AoU-DS-IHCC`).
+- `source_ccdi`: mark `classification="restricted"` (entitlement group `AoU-DS-CCDI`).
 - `sources.py`: helpers `public_keys()`, `restricted_keys()`, `key_for_group(gid)`;
-  load restricted `entitlement_group_id`s from the `DATASET_ENTITLEMENTS` config.
-- **Tests:** registry classification + group→key resolution.
+  load restricted `entitlement_group_id`s from the `DATASET_ENTITLEMENTS` config, e.g.
+  `{"ihcc": "<AoU-DS-IHCC guid>", "ccdi": "<AoU-DS-CCDI guid>"}`.
+- **Tests:** registry classification (publication/project public; ihcc/ccdi restricted)
+  + group→key resolution.
 
 ### Phase 3 — Authorization (behind `AUTH_ENFORCED`)
 - New `auth.py`:
@@ -86,14 +92,16 @@ Behavior stays identical (all datasets are `public` → everyone still sees all)
   - `/refresh`: if enforced → require `is_admin` else `403`.
   - `/health`: return generic `{"status":"ok"}` (no per-dataset counts).
 - **Tests:** unauthenticated/missing-base → 401/403; entitled sets drive results
-  (apples-user sees apples not bananas); admin gate; health generic; flag-off parity.
+  (an IHCC-entitled user sees publication/project + IHCC but not CCDI); admin gate;
+  health generic; flag-off parity.
 
 ### Phase 4 — Connector + Azure/Entra config
 - `custom_connector/openapi-swagger.yaml`: apiKey → **OAuth 2.0 (Azure AD, delegated)**
   (client id, tenant, auth/token URLs, scope `api://<api-app-id>/.default`); per-cloud
   authorities (GCC = `login.microsoftonline.us`).
 - `deployment/deploy_azure_infrastructure.txt`: create/reference the **API + client
-  app registrations**, **groups** (`AoU-Agent-Users`, `AoU-DS-<name>`), **App Role
+  app registrations**, **groups** (`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`),
+  **App Role
   `Agent.Admin`**, filtered **group-claims** token config, **Easy Auth** (Require auth
   = 401, `excludedPaths=[/api/health]`, audiences=`api://<api-app-id>`), a **Key Vault**
   for the client secret, and the new app settings (`AUTH_ENFORCED`,
