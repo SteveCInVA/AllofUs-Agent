@@ -83,11 +83,10 @@ Current classification: **publication** and **project** are public (gated by the
 entitlement); **ihcc** and **ccdi** are restricted, each requiring its own group
 (`AoU-DS-IHCC`, `AoU-DS-CCDI`).
 The `Source` in the registry carries `classification`, `entitlement_group_id`, and
-its index blob name — but these are **applied from configuration** (an app-settings
-JSON map or a config blob), not hardcoded in the source modules. Changing a dataset's
-classification or its entitlement group is therefore a **configuration change**
-(app-settings restart or config-blob hot-reload) plus the matching Entra group work —
-**not an application redeploy**.
+its index blob name — but these are **applied from an app-settings JSON map**
+(`DATASET_CLASSIFICATION`), not hardcoded in the source modules. Changing a dataset's
+classification or its entitlement group is therefore an **app-settings change (which
+restarts the app)** plus the matching Entra group work — **not an application redeploy**.
 
 ## 7. Index architecture (extends today's registry)
 - Refresh builds **each dataset's index independently** → uploads `index/<dataset>.pkl`
