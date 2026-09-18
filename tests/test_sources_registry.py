@@ -24,11 +24,45 @@ def test_get_enabled_sources_excludes_disabled(monkeypatch):
 
 
 def test_source_base_defaults():
-    called = {}
     s = source_base.Source(key="demo", label="Demo",
                            fetch=lambda: None, normalize=lambda r: [])
     assert s.cache_blob == "demo.docs.json"
     assert s.record_type == "Demo"
+    assert s.index_blob == "index/demo.pkl"
+    assert s.classification == "public" and s.entitlement_group_id == ""
+
+
+@pytest.fixture
+def restore_classification():
+    """Snapshot + restore each source's classification/entitlement across a test."""
+    snap = [(s, s.classification, s.entitlement_group_id) for s in sources.ALL_SOURCES]
+    yield
+    for s, c, g in snap:
+        s.classification, s.entitlement_group_id = c, g
+
+
+def test_default_classification_is_public():
+    assert set(sources.public_keys()) == set(sources.source_keys())
+    assert sources.restricted_keys() == []
+
+
+def test_apply_classification_marks_ihcc_ccdi_restricted(restore_classification):
+    sources.apply_classification({
+        "ihcc": {"classification": "restricted", "entitlement_group_id": "G-IHCC"},
+        "ccdi": {"classification": "restricted", "entitlement_group_id": "G-CCDI"},
+    })
+    assert sorted(sources.restricted_keys()) == ["ccdi", "ihcc"]
+    assert sorted(sources.public_keys()) == ["project", "publication"]
+    assert sources.key_for_group("G-IHCC") == "ihcc"
+    assert sources.key_for_group("G-CCDI") == "ccdi"
+    assert sources.key_for_group("unknown") is None
+
+
+def test_unlisted_dataset_stays_public(restore_classification):
+    sources.apply_classification({"ihcc": {"classification": "restricted",
+                                           "entitlement_group_id": "G1"}})
+    assert "ccdi" in sources.public_keys()  # unlisted -> default public
+    assert "ihcc" in sources.restricted_keys()
 
 
 REQUIRED_KEYS = {"id", "source", "record_type", "title", "url", "snippet", "_body"}

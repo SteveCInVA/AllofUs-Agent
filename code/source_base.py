@@ -27,9 +27,17 @@ class Source:
     enabled: bool = True
     cache_blob: str = ""                        # per-source normalized-docs cache blob
     record_type: str = ""                       # optional label for the record kind
+    # Applied from the DATASET_CLASSIFICATION app-setting (see sources.py), not
+    # hardcoded here. "public" = gated by the base entitlement only; "restricted"
+    # = additionally requires the Entra group in entitlement_group_id.
+    classification: str = "public"
+    entitlement_group_id: str = ""              # Entra group object id (restricted only)
+    index_blob: str = ""                        # per-dataset index blob (index/<key>.pkl)
 
     def __post_init__(self):
         if not self.cache_blob:
             self.cache_blob = f"{self.key}.docs.json"
         if not self.record_type:
             self.record_type = self.label
+        if not self.index_blob:
+            self.index_blob = f"index/{self.key}.pkl"
