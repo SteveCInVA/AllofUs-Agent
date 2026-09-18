@@ -39,10 +39,14 @@ been changed yet.**
   `roles` (app roles) and group object IDs. `auth.py` parses it. Set Easy Auth
   **Require authentication = Return 401** with `/api/health` in **excludedPaths** so
   health stays anonymous while everything else is gated by the platform.
-- **Group IDs are config, not code.** Base group id, admin role name, and each
-  restricted dataset's `entitlement_group_id` come from **app settings / a config
-  blob** (they are GCC-tenant-specific), e.g. `BASE_ENTITLEMENT_GROUP_ID`,
-  `ADMIN_ROLE=Agent.Admin`, and a `DATASET_ENTITLEMENTS` JSON map `{key: group_id}`.
+- **Classification + group IDs are config, not code.** Each dataset's
+  `classification` and `entitlement_group_id`, the base group id, and the admin role
+  name come from **app settings / a config blob** (they are GCC-tenant-specific and
+  operationally adjustable). A `DATASET_CLASSIFICATION` map drives per-dataset
+  classification; `BASE_ENTITLEMENT_GROUP_ID` and `ADMIN_ROLE=Agent.Admin` cover the
+  base/admin entitlements. **Adjusting a dataset's classification never requires an
+  application redeploy** — it is an app-settings change (restart) or a config-blob edit
+  (hot-reloaded).
 - **`AUTH_ENFORCED` feature flag.** Lets us deploy the code first (flag off = current
   behavior) and flip enforcement on after the Entra objects + connector cutover, so
   there's no big-bang break. Keep function keys enabled during transition.
@@ -70,14 +74,23 @@ every caller still sees all datasets. Classification (Phase 2) and enforcement
 ### Phase 2 — Classification config on the Source model
 - `source_base.py`: add `classification` (`public`/`restricted`), `entitlement_group_id`,
   `index_blob` (default `index/<key>.pkl`).
-- `source_allofus`: mark `classification="public"` (publication, project).
-- `source_ihcc`: mark `classification="restricted"` (entitlement group `AoU-DS-IHCC`).
-- `source_ccdi`: mark `classification="restricted"` (entitlement group `AoU-DS-CCDI`).
-- `sources.py`: helpers `public_keys()`, `restricted_keys()`, `key_for_group(gid)`;
-  load restricted `entitlement_group_id`s from the `DATASET_ENTITLEMENTS` config, e.g.
-  `{"ihcc": "<AoU-DS-IHCC guid>", "ccdi": "<AoU-DS-CCDI guid>"}`.
-- **Tests:** registry classification (publication/project public; ihcc/ccdi restricted)
-  + group→key resolution.
+- **Classification is config-driven, not hardcoded.** A single `DATASET_CLASSIFICATION`
+  config (an app-settings JSON map, or a small config blob) is the source of truth:
+  `{ "<key>": { "classification": "...", "entitlement_group_id": "<guid>" } }`. The
+  registry applies it to each `Source` at load; the source modules do **not** hardcode
+  classification. A key not present in the config defaults to `public`.
+  - Initial config: `publication`/`project` = public; `ihcc` = restricted
+    (`AoU-DS-IHCC`); `ccdi` = restricted (`AoU-DS-CCDI`).
+- **No redeploy to change classification.** Because it lives in config, flipping a
+  dataset public↔restricted or changing its group is a **configuration change** —
+  an app-settings update (app restart) or a config-blob edit (hot-reloaded like the
+  index ETag), plus the matching Entra group work. It is **not** an application
+  redeploy. (Note: making a brand-new dataset restricted still needs a `/api/refresh`
+  to build its index, and the Entra group must exist/be assigned.)
+- `sources.py`: helpers `public_keys()`, `restricted_keys()`, `key_for_group(gid)` read
+  from the applied config.
+- **Tests:** config applied correctly (publication/project public; ihcc/ccdi restricted);
+  changing the config flips classification with no code change; unknown key → public.
 
 ### Phase 3 — Authorization (behind `AUTH_ENFORCED`)
 - New `auth.py`:
@@ -136,8 +149,10 @@ every caller still sees all datasets. Classification (Phase 2) and enforcement
 - **Rollback** at any point: set `AUTH_ENFORCED=false` and re-enable keys.
 
 ## 6. Open decisions
-1. **Group-id config channel:** app settings (`DATASET_ENTITLEMENTS` JSON) vs a small
-   config blob the admin edits. Recommend app settings for now (few datasets).
+1. **Classification config channel:** app-settings JSON (`DATASET_CLASSIFICATION`;
+   change = app restart, no redeploy) vs a **config blob** the admin edits (hot-reloaded
+   like the index ETag; no restart). Recommend app settings for now (few datasets);
+   config blob if you want zero-restart edits by data owners.
 2. **Packaged fallback:** ship public per-dataset indexes (instant-after-deploy) vs
    require an initial `/api/refresh`. Recommend ship public only.
 3. **Health:** fully generic `{"status":"ok"}` vs include a **public** total only.
