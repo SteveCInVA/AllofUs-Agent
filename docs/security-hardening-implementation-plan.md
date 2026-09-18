@@ -15,7 +15,7 @@ been changed yet.**
 | `Source` model | `key,label,fetch,normalize,enabled,cache_blob,record_type` | + `classification`, `entitlement_group_id`, `index_blob` |
 | `/search` auth | `FUNCTION` key; filters by `directory` only | `ANONYMOUS` + Easy Auth; require base group; results limited to **entitled** datasets |
 | `/refresh` auth | `FUNCTION` key | require **`Agent.Admin`** app role |
-| `/health` | returns per-source `counts` | anonymous, **generic status only** |
+| `/health` | returns per-source `counts` | anonymous; enumerates **every** dataset (incl. restricted) with name + record count, read from a manifest |
 | refresh_job | builds one merged corpus | builds/uploads **per-dataset** indexes |
 | Auth/claims code | **none** | new `auth.py` (parse `X-MS-CLIENT-PRINCIPAL`, resolve entitlements) |
 | Connector | apiKey `x-functions-key` | OAuth 2.0 (Entra, delegated) |
@@ -60,12 +60,18 @@ every caller still sees all datasets. Classification (Phase 2) and enforcement
   `download_index(key) -> (bytes, etag)`, `get_index_etag(key)` (blob `index/<key>.pkl`).
   Keep the old corpus functions temporarily for rollback.
 - `refresh_job.py`: build **one artifact per dataset** and upload each; return
-  per-dataset counts/etags/statuses (extends the existing per-source loop).
+  per-dataset counts/etags/statuses (extends the existing per-source loop). Also write
+  a small **manifest blob** (`index/manifest.json`) listing every dataset with its
+  `key`, `name` (label), `classification`, record `count`, and `updated_at`/`status`.
 - `search_core.py`: add a helper to **merge multiple `(docs, tokens)` artifacts** into
   one engine (union docs, rebuild BM25).
 - `function_app.py`: replace the single-engine globals with a **per-entitlement
   merged-engine cache** (`{signature: (docs, bm25, composite_etag, last_check)}`);
   `_engine(keys)` loads/merges the given dataset indexes with hot-reload.
+- `function_app.py` `/health`: read the **manifest** and return **every** dataset with
+  `name` + record `count` (including restricted) — a lightweight read, no engine load.
+  Stays anonymous. ⚠️ This intentionally discloses restricted **dataset names + counts**
+  (not content) to unauthenticated callers.
 - `build_index.py`: write per-dataset packaged indexes (public only).
 - **Tests:** per-dataset upload/download; merged-engine equivalence to today; refresh
   produces N indexes.
@@ -101,10 +107,12 @@ every caller still sees all datasets. Classification (Phase 2) and enforcement
     intersect with any requested `directory`, load merged engine for those, trim
     results + counts. Flag off → today's behavior.
   - `/refresh`: if enforced → require `is_admin` else `403`.
-  - `/health`: return generic `{"status":"ok"}` (no per-dataset counts).
+  - `/health`: unchanged from Phase 1 — anonymous, enumerates every dataset (incl.
+    restricted) with name + count from the manifest (never trimmed by caller).
 - **Tests:** unauthenticated/missing-base → 401/403; entitled sets drive results
   (an IHCC-entitled user sees publication/project + IHCC but not CCDI); admin gate;
-  health generic; flag-off parity.
+  **health enumerates all datasets (incl. restricted) with name + count** even for an
+  anonymous caller; flag-off parity.
 
 ### Phase 4 — Connector + Azure/Entra config
 - `custom_connector/openapi-swagger.yaml`: apiKey → **OAuth 2.0 (Azure AD, delegated)**
@@ -151,8 +159,9 @@ every caller still sees all datasets. Classification (Phase 2) and enforcement
    (`DATASET_CLASSIFICATION`); changing it restarts the app, no redeploy.
 2. **Packaged fallback:** ship public per-dataset indexes (instant-after-deploy) vs
    require an initial `/api/refresh`. Recommend ship public only.
-3. **Health:** fully generic `{"status":"ok"}` vs include a **public** total only.
-   Recommend fully generic.
+3. **Health:** ✅ **DECIDED — enumerate every dataset (incl. restricted) with name +
+   record count**, read from `index/manifest.json`, anonymously. Consciously discloses
+   restricted dataset names + counts (not content) to unauthenticated callers.
 4. Confirm Easy Auth `excludedPaths` for `/api/health` is acceptable vs enforcing per-route in code.
 
 ## 7. Effort (rough)

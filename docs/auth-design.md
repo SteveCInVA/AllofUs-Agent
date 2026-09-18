@@ -30,7 +30,7 @@ group gets `403`, and "public" means "available to all entitled agent users," no
 | Tiers | Binary per dataset: `public` or `restricted` (restricted = compartmented by dataset) |
 | Base entitlement | An Entra **group** (`AoU-Agent-Users`) required to use `/search` |
 | Refresh (HTTP) | Requires the **`Agent.Admin`** app role |
-| Health | **Anonymous**, generic status only |
+| Health | **Anonymous**; enumerates every dataset (incl. restricted) with name + record count, from a manifest |
 | Index strategy | **Per-dataset indexes**; load/merge only entitled ones |
 | Group claims | **Filtered group claims** (groups assigned to the app) to keep tokens lean and avoid the >200-group overage |
 | Classification source of truth | Maintained **in the application dataset config** |
@@ -60,7 +60,7 @@ the entitled set. `Agent.Admin` app role gates HTTP refresh.
 |---|---|
 | `GET/POST /api/search` | Require `AoU-Agent-Users`; entitled datasets = all `public` + every `restricted` whose group is in the caller's claims. Trim results **and counts** to that set. `403` if base group absent. |
 | `POST /api/refresh` | Require **`Agent.Admin`** app role; rebuilds all dataset indexes. `403` otherwise. |
-| `GET /api/health` | Anonymous; generic `ok` only (no per-dataset restricted counts). |
+| `GET /api/health` | Anonymous; enumerates **every** dataset (incl. restricted) with `name` + record `count` read from `index/manifest.json`. Discloses restricted dataset names + counts (not content) — an accepted trade-off for operational visibility. |
 
 Note: the internal **daily timer** refresh runs in-process (no HTTP token) and is
 unaffected by the `Agent.Admin` gate — that gate protects only the HTTP endpoint.
