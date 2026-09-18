@@ -124,11 +124,49 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 |$uri|"https://$app.azurewebsites.net/api"|Not needed unless operating in other than commericial Azure subscription|
 
 ### Testing functions
-- Health - evaluates response from the Health endpoint and returns the total number of records in cache plus a per-source `counts` breakdown (publication, project, ihcc, ccdi)
-- Refresh - causes the cache to become invalidated and forces a refresh (rebuilds from all sources; a source that is temporarily unavailable falls back to its last cached copy so the corpus is never blanked)
-- Search - Executes a basic query and displays results
+- Health - anonymous; returns every dataset (including restricted ones) with its name, classification, and record count, read from the manifest (`index/manifest.json`)
+- Refresh - rebuilds each dataset's index and the manifest; a source that is temporarily unavailable keeps its previous index (never blanked). Requires the Admin role when `AUTH_ENFORCED=true`
+- Search - Executes a basic query and displays results (trimmed to the caller's entitled datasets when `AUTH_ENFORCED=true`)
+
+## Authentication & Authorization (security hardening)
+
+The service supports per-user, entitlement-based access. Design details are in
+[`docs/auth-design.md`](docs/auth-design.md) and
+[`docs/security-hardening-implementation-plan.md`](docs/security-hardening-implementation-plan.md).
+
+**Model**
+- **Delegated Microsoft Entra sign-in** (the user's identity flows to the Function via
+  App Service Authentication / "Easy Auth").
+- **Datasets are entitlements.** `publication`/`project` are public (gated by the base
+  group `AoU-Agent-Users`); `ihcc`/`ccdi` are restricted, each requiring its own Entra
+  group (`AoU-DS-IHCC`, `AoU-DS-CCDI`). Classification is driven by the
+  `DATASET_CLASSIFICATION` app-setting — changing it is a config change, never a redeploy.
+- `/search` requires the base group and returns only the caller's entitled datasets.
+  `/refresh` requires the **`Agent.Admin`** app role. `/health` is anonymous and
+  enumerates every dataset with name + count.
+
+**Feature flag — `AUTH_ENFORCED`.** When `false` (default), the app behaves as before
+(function-key auth, all datasets visible) so the code can ship before Entra is live.
+When `true`, the claims-based checks above are enforced.
+
+**Setup**
+1. Deploy infrastructure (`deploy_azure_infrastructure.txt`).
+2. Run [`deployment/deploy_entra_auth.txt`](deployment/deploy_entra_auth.txt) to create the
+   API + client app registrations, the groups, the `Agent.Admin` role, Easy Auth
+   (with `/api/health` excluded), a Key Vault for the connector secret, and the auth
+   app settings. It leaves `AUTH_ENFORCED=false`.
+3. **Cutover:** import the OAuth2 connector
+   (`custom_connector/openapi-swagger-oauth2.yaml`), set `AUTH_ENFORCED=true`, verify
+   entitlements, switch the `/search` and `/refresh` route auth levels to `ANONYMOUS`
+   (Easy Auth now gates), then disable the function keys.
+
+**Rollback:** set `AUTH_ENFORCED=false` and re-enable function keys.
 
 ## Custom Connector (AKA Copilot Studio Tools)
+
+> Use `openapi-swagger.yaml` (function key) during the interim, or
+> `openapi-swagger-oauth2.yaml` (delegated Entra) at/after the security cutover.
+
 
 1. Open the /custom_connector/openapi-swagger.yaml file.
 
