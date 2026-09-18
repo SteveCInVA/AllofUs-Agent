@@ -5,8 +5,8 @@
 # update the folloing variables as required
 
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo31"
-$sfx = "aou0731"
+$rg  = "rg-allofus-demo18"
+$sfx = "aou0918"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $vnetName = "vnet-allofus"
@@ -42,7 +42,14 @@ switch ($cloud) {
 # Target the correct Azure cloud BEFORE login (commercial vs. government)
 az cloud set --name $cloud
 
-az login
+# Log in only if not already authenticated to the selected cloud
+az account show -o none 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "Not logged in; launching az login..."
+    az login
+} else {
+    Write-Output "Already logged in as $(az account show --query user.name -o tsv)"
+}
 
 # Resource Group
 az group create `

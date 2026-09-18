@@ -16,11 +16,21 @@ switch ($cloud) {
   "AzureUSGovernment" { $authorityHost = "https://login.microsoftonline.us" }
   default             { $authorityHost = "https://login.microsoftonline.com" }
 }
-$tenantId = az account show --query tenantId -o tsv
 ##################################################
 
 az cloud set --name $cloud
-az login
+
+# Log in only if not already authenticated to the selected cloud
+az account show -o none 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "Not logged in; launching az login..."
+    az login
+} else {
+    Write-Output "Already logged in as $(az account show --query user.name -o tsv)"
+}
+
+# Capture the tenant after login/cloud selection
+$tenantId = az account show --query tenantId -o tsv
 
 # ------------------------------------------------------------------ 1. Entra apps
 # API app registration (the Function's audience). Expose a scope + an Admin app role.
