@@ -19,6 +19,16 @@ az cloud set --name $cloud
 ##########################################
 # capture function keys for auth in header 
 ##########################################
+#
+# Function keys are used while AUTH_ENFORCED=false (the interim). After the security
+# cutover (AUTH_ENFORCED=true with Easy Auth), use a Microsoft Entra bearer token
+# instead of the function key — acquire one for the API app's scope and send it as
+# an Authorization header:
+#
+#   $token = az account get-access-token --resource "api://<API-APP-ID>" --query accessToken -o tsv
+#   $headers = @{ "Authorization" = "Bearer $token" }
+#
+# (/api/health stays anonymous and needs no header in either mode.)
 
 $key = az functionapp keys list `
     --resource-group $rg `

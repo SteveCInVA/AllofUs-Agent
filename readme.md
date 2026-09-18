@@ -102,9 +102,26 @@ Use the same window that the infrastructure deployment completed in.
 
 > **Note:** Code build / deploy takes ~5 minutes
 
+Optionally, generate the packaged first-run indexes before publishing so the agent
+works immediately after deploy (restricted datasets are never packaged):
+
+```
+cd /code
+python build_index.py --public      # packages public datasets to code/index/*.pkl
+```
+
+Then publish:
+
 ```
 cd /code
 func azure functionapp publish $functionSvcName --build remote
+```
+
+After deploy, trigger a refresh (or wait for the daily 03:00 UTC timer) to build
+every dataset's index in Blob Storage:
+
+```
+# POST /api/refresh  (see /deployment/testing_azure_functions.txt)
 ```
 
 When successfully deployed user will see the deployed functions and the URL associated to each.
