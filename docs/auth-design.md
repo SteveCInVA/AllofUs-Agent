@@ -1,7 +1,8 @@
 # Authentication & Authorization Design
 
-**Status:** Approved design (not yet implemented). No application code changes are
-made by this document — it is the plan for the security-hardening work.
+**Status: Implemented** (branch `feature/multi-source`). This is the design of record
+for authentication and authorization; the as-built details and operator cutover are
+in [`security-hardening.md`](security-hardening.md).
 
 ## 1. Requirement
 Access to datasets is entitlement-based and per user:
@@ -113,16 +114,17 @@ flowchart TB
     RANK --> OUT["results: entitled records only"]
 ```
 
-## 9. Changes required (plan only — no code yet)
-| Area | Change |
+## 9. Where it lives in the code
+| Area | Implementation |
 |---|---|
-| `code/function_app.py` | routes → `ANONYMOUS` (Easy Auth gates); parse `X-MS-CLIENT-PRINCIPAL`; base-group check on `/search`; `Agent.Admin` check on `/refresh`; per-request index selection + trimming |
-| `code/source_base.py`, `sources.py` | add `classification`, `entitlement_group_id`, per-dataset index name (the classification config) |
-| `code/refresh_job.py`, `storage.py` | write/read **per-dataset index blobs** instead of one `corpus.pkl` |
-| `code/search_core.py` | search across a **merged set of entitled indexes** |
-| `custom_connector/openapi-swagger.yaml` | apiKey → **OAuth 2.0 (Azure AD, delegated)** |
-| `deployment/*` | app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault for the client secret; GCC authorities |
-| `tests/` | authorization + trimming tests (entitled vs unentitled datasets; admin vs non-admin refresh; anonymous health) |
+| `code/function_app.py` | claims parse + base-group check on `/search`, `Agent.Admin` on `/refresh`, per-request entitled-index selection; routes flip to `ANONYMOUS` at cutover |
+| `code/auth.py` | parse `X-MS-CLIENT-PRINCIPAL`; `has_base`, `is_admin`, `entitled_keys` |
+| `code/source_base.py`, `sources.py` | `classification`, `entitlement_group_id`, `index_blob`; applied from `DATASET_CLASSIFICATION` |
+| `code/refresh_job.py`, `storage.py` | per-dataset index blobs + manifest |
+| `code/search_core.py` | merged engine over the entitled index set |
+| `custom_connector/openapi-swagger-oauth2.yaml` | OAuth 2.0 (Entra, delegated) connector |
+| `deployment/deploy_entra_auth.txt` | app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault, GCC authorities |
+| `tests/` | authorization + trimming tests (entitled vs unentitled; admin vs non-admin refresh; anonymous health) |
 
 ## 10. Service principal — where it lands
 Not for user access (no user context). Retained only for **non-interactive machine
@@ -133,12 +135,8 @@ Use gov-cloud authorities (`login.microsoftonline.us`, `*.azurewebsites.us`), cr
 the app registrations/groups in the **customer GCC tenant**, and parameterize the
 IaC/connector accordingly.
 
-## 12. Effort & sequencing (rough)
-1. Entra objects (app regs, groups, role, token config) + admin consent — ~2h
-2. Per-dataset index refactor (refresh + storage + search + cache) — ~5h
-3. Function authz (claims parse, base/admin checks, trimming) — ~4h
-4. Connector OAuth2 + deploy-script + Key Vault — ~4h
-5. Authorization tests — ~2h
-
-**Rollback:** keep function keys enabled during transition; cut the connector over
-to OAuth2, verify, then disable keys.
+## 12. Rollout & rollback
+The code shipped behind the `AUTH_ENFORCED` flag (default `false` = prior behavior),
+so enforcement is turned on only after the Entra objects and OAuth2 connector are in
+place. See [`security-hardening.md`](security-hardening.md) for the operator setup and
+cutover steps. **Rollback:** set `AUTH_ENFORCED=false` and re-enable function keys.

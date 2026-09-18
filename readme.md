@@ -41,7 +41,7 @@ one variable.
 >   matching **GCC** Power Platform environment, and use the `.azurewebsites.us`
 >   host suffix in the connector's `host:` value.
 >
-> See `docs/multi-cloud-deploy-plan.md` for the full multi-cloud plan.
+> See `docs/multi-cloud-deployment.md` for the full multi-cloud reference.
 
 ## Deployment steps
 
@@ -149,7 +149,7 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 
 The service supports per-user, entitlement-based access. Design details are in
 [`docs/auth-design.md`](docs/auth-design.md) and
-[`docs/security-hardening-implementation-plan.md`](docs/security-hardening-implementation-plan.md).
+[`docs/security-hardening.md`](docs/security-hardening.md).
 
 **Model**
 - **Delegated Microsoft Entra sign-in** (the user's identity flows to the Function via
