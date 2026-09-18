@@ -123,7 +123,7 @@ flowchart TB
 | `code/refresh_job.py`, `storage.py` | per-dataset index blobs + manifest |
 | `code/search_core.py` | merged engine over the entitled index set |
 | `custom_connector/openapi-swagger-oauth2.yaml` | OAuth 2.0 (Entra, delegated) connector |
-| `deployment/deploy_entra_auth.txt` | app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault, GCC authorities |
+| `deployment/deploy_entra_auth.ps1` | app registrations, groups, Easy Auth, `Agent.Admin` role, Key Vault, GCC authorities |
 | `tests/` | authorization + trimming tests (entitled vs unentitled; admin vs non-admin refresh; anonymous health) |
 
 ## 10. Service principal — where it lands

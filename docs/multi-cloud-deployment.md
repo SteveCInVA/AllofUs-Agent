@@ -27,7 +27,7 @@ branching in the Python.
   `DefaultAzureCredential` targets the right authority. Connection-string auth
   auto-handles the suffix via `EndpointSuffix=`.
 
-### Deployment script (`deployment/deploy_azure_infrastructure.txt`)
+### Deployment script (`deployment/deploy_azure_infrastructure.ps1`)
 - A `$cloud` `switch` derives `$endpointSuffix`, `$privateLinkSuffix`,
   `$functionHostSuffix`, `$authorityHost`, `$portalOrigins`, and default `$loc`.
 - `az cloud set --name $cloud` runs before `az login`.
@@ -40,11 +40,11 @@ branching in the Python.
 ### Connector + testing
 - The connector `host:` suffix is set per cloud on import (`.azurewebsites.net` /
   `.azurewebsites.us`).
-- `deployment/testing_azure_functions.txt` parameterizes the host suffix and runs
+- `deployment/testing_azure_functions.ps1` parameterizes the host suffix and runs
   after `az cloud set`.
 
 ## Deploy to a cloud
-Set `$cloud` at the top of `deploy_azure_infrastructure.txt`
+Set `$cloud` at the top of `deploy_azure_infrastructure.ps1`
 (`AzureCloud` or `AzureUSGovernment`); everything else derives automatically.
 
 ## Operational confirmations for Azure Government / GCC

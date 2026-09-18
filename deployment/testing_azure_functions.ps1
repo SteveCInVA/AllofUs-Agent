@@ -1,7 +1,7 @@
 # Testing Azure Functions:
 
 ##################################
-Test function after deployment
+# Test function after deployment
 ##################################
 
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC

@@ -1,6 +1,6 @@
 # NIH All of Us — Security hardening: Entra ID auth, Easy Auth, Key Vault, app settings
 #
-# Run AFTER deploy_azure_infrastructure.txt (the Function must already exist).
+# Run AFTER deploy_azure_infrastructure.ps1 (the Function must already exist).
 # Some Entra operations may require Application Administrator / Cloud App Admin
 # rights and a Graph-enabled az login. Values in <ANGLE BRACKETS> are filled in
 # as you go. Parameterize $cloud the same way as the infrastructure script.

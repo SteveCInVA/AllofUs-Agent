@@ -89,7 +89,7 @@ refresh). Suite: 107 tests, ~94% coverage.
 ## Remaining operator setup + cutover
 The application code is complete; going live requires tenant/deploy actions:
 
-1. Run [`../deployment/deploy_entra_auth.txt`](../deployment/deploy_entra_auth.txt) to
+1. Run [`../deployment/deploy_entra_auth.ps1`](../deployment/deploy_entra_auth.ps1) to
    create the API + client app registrations, the groups (`AoU-Agent-Users`,
    `AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, filtered group-claims token
    config, **Easy Auth** (Return 401 with `/api/health` excluded), a **Key Vault** for
