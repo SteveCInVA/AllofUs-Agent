@@ -11,6 +11,8 @@ info:
   version: '1.1.0'
 # After you deploy the Azure Function, replace <FUNCTIONAPP-NAME> with your app
 # name (e.g. func-allofus-poc-4821). Host must be public HTTPS.
+# Suffix depends on the target cloud: use .azurewebsites.net for Azure Commercial
+# or .azurewebsites.us for Azure Government / GCC.
 host: <FUNCTIONAPP-NAME>.azurewebsites.net
 basePath: /api
 schemes:

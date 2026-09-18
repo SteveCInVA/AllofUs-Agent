@@ -27,8 +27,26 @@ def test_account_url_from_account_name(monkeypatch):
     monkeypatch.delenv("CORPUS_STORAGE__blobServiceUri", raising=False)
     monkeypatch.delenv("AzureWebJobsStorage__blobServiceUri", raising=False)
     monkeypatch.delenv("CORPUS_STORAGE__accountName", raising=False)
+    monkeypatch.delenv("STORAGE_ENDPOINT_SUFFIX", raising=False)
     monkeypatch.setenv("AzureWebJobsStorage__accountName", "acct")
     assert storage._account_url() == "https://acct.blob.core.windows.net"
+
+
+def test_account_url_uses_gov_suffix(monkeypatch):
+    monkeypatch.delenv("CORPUS_STORAGE__blobServiceUri", raising=False)
+    monkeypatch.delenv("AzureWebJobsStorage__blobServiceUri", raising=False)
+    monkeypatch.setenv("AzureWebJobsStorage__accountName", "acct")
+    monkeypatch.setenv("STORAGE_ENDPOINT_SUFFIX", "core.usgovcloudapi.net")
+    assert storage._account_url() == "https://acct.blob.core.usgovcloudapi.net"
+
+
+def test_account_url_prefers_service_uri(monkeypatch):
+    # Injected *ServiceUri wins over the constructed fallback (either cloud).
+    monkeypatch.setenv("AzureWebJobsStorage__blobServiceUri",
+                       "https://acct.blob.core.usgovcloudapi.net")
+    monkeypatch.setenv("AzureWebJobsStorage__accountName", "acct")
+    monkeypatch.setenv("STORAGE_ENDPOINT_SUFFIX", "core.windows.net")
+    assert storage._account_url() == "https://acct.blob.core.usgovcloudapi.net"
 
 
 def test_service_raises_without_config(monkeypatch):

@@ -17,7 +17,13 @@ def _conn():
 
 
 def _account_url():
-    """Blob endpoint for identity-based connections (managed identity)."""
+    """Blob endpoint for identity-based connections (managed identity).
+
+    Prefers the runtime-injected *__blobServiceUri (set correctly per cloud by the
+    deploy). Falls back to constructing the URL from the account name and a
+    configurable endpoint suffix (STORAGE_ENDPOINT_SUFFIX) so the same code works
+    in Azure Commercial (core.windows.net) and Azure Government (core.usgovcloudapi.net).
+    """
     uri = (os.environ.get("CORPUS_STORAGE__blobServiceUri")
            or os.environ.get("AzureWebJobsStorage__blobServiceUri"))
     if uri:
@@ -25,7 +31,8 @@ def _account_url():
     account = (os.environ.get("CORPUS_STORAGE__accountName")
                or os.environ.get("AzureWebJobsStorage__accountName"))
     if account:
-        return f"https://{account}.blob.core.windows.net"
+        suffix = os.environ.get("STORAGE_ENDPOINT_SUFFIX", "core.windows.net")
+        return f"https://{account}.blob.{suffix}"
     return None
 
 

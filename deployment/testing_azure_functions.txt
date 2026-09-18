@@ -4,10 +4,17 @@
 Test function after deployment
 ##################################
 
+$cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
 $rg  = "rg-allofus-demo01"
 $sfx = "aou1234"
 $app = "func-allofus-$sfx"
-$uri = "https://$app.azurewebsites.net/api"
+
+# Function hostname suffix per cloud (.azurewebsites.net commercial / .us government)
+$functionHostSuffix = if ($cloud -eq "AzureUSGovernment") { "azurewebsites.us" } else { "azurewebsites.net" }
+$uri = "https://$app.$functionHostSuffix/api"
+
+# Target the correct Azure cloud before running az commands below
+az cloud set --name $cloud
 
 ##########################################
 # capture function keys for auth in header 

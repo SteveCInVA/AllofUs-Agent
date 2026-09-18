@@ -4,8 +4,8 @@
 ##################################################
 # update the folloing variables as required
 
+$cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
 $rg  = "rg-allofus-demo31"
-$loc = "eastus"
 $sfx = "aou0731"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
@@ -16,7 +16,31 @@ $funcSubnetAddrSpace = "192.168.0.0/25"
 $peSubnetStorage = "pe-storage"
 $peSubnetStorageAddrSpace = "192.168.0.128/25"
 
+# Cloud-specific endpoints derived from $cloud (do not edit unless adding a cloud).
+# Override $loc below if you want a different region within the selected cloud.
+switch ($cloud) {
+  "AzureUSGovernment" {
+    $loc                = "usgovvirginia"
+    $endpointSuffix     = "core.usgovcloudapi.net"
+    $privateLinkSuffix  = "core.usgovcloudapi.net"
+    $functionHostSuffix = "azurewebsites.us"
+    $authorityHost      = "https://login.microsoftonline.us"
+    $portalOrigins      = @("https://portal.azure.us")
+  }
+  default {
+    $loc                = "eastus"
+    $endpointSuffix     = "core.windows.net"
+    $privateLinkSuffix  = "core.windows.net"
+    $functionHostSuffix = "azurewebsites.net"
+    $authorityHost      = "https://login.microsoftonline.com"
+    $portalOrigins      = @("https://portal.azure.com", "https://ms.portal.azure.com")
+  }
+}
+
 ##################################################
+
+# Target the correct Azure cloud BEFORE login (commercial vs. government)
+az cloud set --name $cloud
 
 az login
 
@@ -48,6 +72,9 @@ az storage account create `
   --sku Standard_LRS
 
 # Azure Function Creation
+# NOTE: Flex Consumption is not available in every Azure Government region. If
+# --flexconsumption-location fails for the selected $loc, either pick a Gov region
+# that offers Flex Consumption or switch to an Elastic Premium / Consumption plan.
 az functionapp create `
   --name $functionSvcName `
   --resource-group $rg `
@@ -101,9 +128,9 @@ az role assignment create `
   --scope $storageId
 
 $zones = @(
-    "privatelink.blob.core.windows.net",
-    "privatelink.queue.core.windows.net",
-    "privatelink.table.core.windows.net"
+    "privatelink.blob.$privateLinkSuffix",
+    "privatelink.queue.$privateLinkSuffix",
+    "privatelink.table.$privateLinkSuffix"
 )
 
 foreach ($zone in $zones) {
@@ -134,7 +161,7 @@ az network private-endpoint dns-zone-group create `
     --resource-group $rg `
     --endpoint-name "pe-$storageAcctName-blob" `
     --name "storage-dns" `
-    --private-dns-zone "privatelink.blob.core.windows.net" `
+    --private-dns-zone "privatelink.blob.$privateLinkSuffix" `
     --zone-name blob
 
 foreach ($service in @("queue", "table")) {
@@ -151,7 +178,7 @@ foreach ($service in @("queue", "table")) {
         --resource-group $rg `
         --endpoint-name "pe-$storageAcctName-$service" `
         --name "storage-dns" `
-        --private-dns-zone "privatelink.$service.core.windows.net" `
+        --private-dns-zone "privatelink.$service.$privateLinkSuffix" `
         --zone-name $service
 }
 
@@ -166,7 +193,19 @@ az functionapp config appsettings set `
   --name $functionSvcName `
   --settings `
       "AzureWebJobsStorage__accountName=$storageAcctName" `
-      "AzureWebJobsStorage__credential=managedidentity"
+      "AzureWebJobsStorage__credential=managedidentity" `
+      "AzureWebJobsStorage__blobServiceUri=https://$storageAcctName.blob.$endpointSuffix" `
+      "AzureWebJobsStorage__queueServiceUri=https://$storageAcctName.queue.$endpointSuffix" `
+      "AzureWebJobsStorage__tableServiceUri=https://$storageAcctName.table.$endpointSuffix"
+
+# Cloud-neutral endpoint settings the app code reads (managed-identity authority +
+# storage suffix used only if the *ServiceUri settings above are ever absent).
+az functionapp config appsettings set `
+  --resource-group $rg `
+  --name $functionSvcName `
+  --settings `
+      "AZURE_AUTHORITY_HOST=$authorityHost" `
+      "STORAGE_ENDPOINT_SUFFIX=$endpointSuffix"
 
 
 az functionapp config appsettings set `
@@ -175,15 +214,13 @@ az functionapp config appsettings set `
     --settings `
         "AzureWebJobsFeatureFlags=EnableWorkerIndexing"
 
-az functionapp cors add `
-  --resource-group $rg `
-  --name $functionSvcName `
-  --allowed-origins "https://portal.azure.com"
-
-az functionapp cors add `
-  --resource-group $rg `
-  --name $functionSvcName `
-  --allowed-origins "https://ms.portal.azure.com"
+# Allow testing from the correct portal for the selected cloud
+foreach ($origin in $portalOrigins) {
+  az functionapp cors add `
+    --resource-group $rg `
+    --name $functionSvcName `
+    --allowed-origins $origin
+}
 
 ##################################
 # Infrastructure deployment complete
