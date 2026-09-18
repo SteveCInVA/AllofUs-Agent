@@ -19,6 +19,30 @@ The deployment code assumes:
 - Access to the AzureCLI
 - Permissions to a subscription that may create a resource group and required objects.
 
+## Cloud selection & pre-deployment confirmations
+
+This solution deploys to **Azure Commercial** or **Azure Government (GCC)**, selected
+by the `$cloud` variable at the top of `deploy_azure_infrastructure.txt`
+(`AzureCloud` or `AzureUSGovernment`). All cloud-specific endpoints (storage suffix,
+private-link DNS zones, portal/CORS, Entra authority, region) are derived from that
+one variable.
+
+> ⚠️ **Confirm these before deploying to Azure Government / GCC:**
+> - **Outbound internet egress.** The refresh job pulls from public internet data
+>   sources — `www.researchallofus.org`, `federation.ccdi.cancer.gov`, and
+>   `raw.githubusercontent.com`. Commercial Functions egress freely, but a
+>   locked-down Gov subscription may block outbound traffic. Ensure egress is
+>   allowed, or route it through Azure Firewall/NAT with an allow-list of those
+>   three domains — otherwise ingestion (`/api/refresh`) will fail.
+> - **Flex Consumption availability.** Flex Consumption is not offered in every Gov
+>   region. If `--flexconsumption-location` fails for your `$loc`, pick a Gov region
+>   that offers Flex Consumption or switch to an Elastic Premium / Consumption plan.
+> - **Power Platform environment.** Build the custom connector and agent in the
+>   matching **GCC** Power Platform environment, and use the `.azurewebsites.us`
+>   host suffix in the connector's `host:` value.
+>
+> See `docs/multi-cloud-deploy-plan.md` for the full multi-cloud plan.
+
 ## Deployment steps
 
 ### Azure Function
@@ -28,8 +52,9 @@ The following varaiables are defined in the top of the deploy_azure_infrastructu
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
+|$cloud|"AzureCloud"|Target Azure cloud: `AzureCloud` (Commercial) or `AzureUSGovernment` (GCC). Derives all cloud-specific endpoints.|
 |$rg|"rg-allofus-demo01"|Resource group name|
-|$loc|"eastus"|Deployment Region|
+|$loc|derived from $cloud|Deployment Region (defaults: `eastus` commercial / `usgovvirginia` government; override after the switch if needed)|
 |$sfx|"aou1234"|Suffix to apply to resources|
 |$storageAcctName|"staallofus$sfx"|Resource name of storage account (includes suffix)|
 |$functionSvcName|"func-allofus-$sfx"|Resource name of Azure Function (includes suffix)|
