@@ -24,6 +24,7 @@ import azure.functions as func
 
 import search_core
 import storage
+import auth
 from refresh_job import rebuild_and_upload
 from sources import source_keys
 
@@ -108,9 +109,21 @@ def _engine(keys):
     return docs, bm25
 
 
-def _entitled_keys(req):
-    """Datasets this caller may search. Phase 1: all datasets (no auth yet)."""
-    return source_keys()
+def _err(status, message):
+    return func.HttpResponse(json.dumps({"error": message}),
+                             status_code=status, mimetype="application/json")
+
+
+def _authorize_search(req):
+    """Return (error_response or None, entitled_keys). Enforced only when AUTH_ENFORCED."""
+    if not auth.enforced():
+        return None, source_keys()
+    principal = auth.get_principal(req)
+    if principal is None:
+        return _err(401, "Authentication required."), None
+    if not auth.has_base(principal):
+        return _err(403, "Not entitled to use this service."), None
+    return None, auth.entitled_keys(principal)
 
 
 def _load_manifest():
@@ -158,8 +171,11 @@ def search_directories(req: func.HttpRequest) -> func.HttpResponse:
     if directory not in allowed:
         directory = "both"
 
+    err, keys = _authorize_search(req)
+    if err is not None:
+        return err
+
     try:
-        keys = _entitled_keys(req)
         docs, bm25 = _engine(keys)
         results = search_core.search(docs, bm25, query, directory, top)
     except Exception as exc:  # noqa: BLE001
@@ -194,7 +210,13 @@ def refresh_timer(timer: func.TimerRequest) -> None:
 
 @app.route(route="refresh", methods=["POST"])
 def refresh_now(req: func.HttpRequest) -> func.HttpResponse:
-    """On-demand rebuild of the per-dataset indexes (function-key protected)."""
+    """On-demand rebuild of the per-dataset indexes. Requires the Admin role when enforced."""
+    if auth.enforced():
+        principal = auth.get_principal(req)
+        if principal is None:
+            return _err(401, "Authentication required.")
+        if not auth.is_admin(principal):
+            return _err(403, "Admin role required to refresh.")
     try:
         summary = rebuild_and_upload()
         _invalidate()

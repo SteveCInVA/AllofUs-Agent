@@ -177,3 +177,82 @@ def test_engine_packaged_fallback(monkeypatch, tmp_path, sample_docs):
     monkeypatch.setattr(fa, "_pkg_path", lambda name: str(tmp_path / name))
     docs, bm25 = fa._engine(["publication"])
     assert len(docs) == 1 and fa._index_cache["publication"]["etag"] is None
+
+
+# ------------------------------------------------------- authorization (enforced)
+
+import base64 as _b64  # noqa: E402
+
+
+def _principal(groups=(), roles=()):
+    claims = [{"typ": "groups", "val": g} for g in groups]
+    claims += [{"typ": "roles", "val": r} for r in roles]
+    return _b64.b64encode(json.dumps({"claims": claims}).encode()).decode()
+
+
+@pytest.fixture
+def enforced(monkeypatch):
+    """Turn on enforcement with ihcc restricted; restore classification after."""
+    import sources
+    monkeypatch.setenv("AUTH_ENFORCED", "true")
+    monkeypatch.setenv("BASE_ENTITLEMENT_GROUP_ID", "BASE")
+    monkeypatch.setenv("ADMIN_ROLE", "Agent.Admin")
+    snap = [(s, s.classification, s.entitlement_group_id) for s in sources.ALL_SOURCES]
+    sources.apply_classification({
+        "ihcc": {"classification": "restricted", "entitlement_group_id": "G-IHCC"},
+        "ccdi": {"classification": "restricted", "entitlement_group_id": "G-CCDI"},
+    })
+    yield
+    for s, c, g in snap:
+        s.classification, s.entitlement_group_id = c, g
+
+
+def _search_req(principal_hdr=None, query="asthma"):
+    headers = {"x-ms-client-principal": principal_hdr} if principal_hdr else {}
+    return func.HttpRequest(method="GET", url="/api/search",
+                            headers=headers, params={"query": query}, body=b"")
+
+
+def test_search_unauthenticated_401(enforced, monkeypatch, sample_docs):
+    _mock_engine(monkeypatch, sample_docs)
+    assert HANDLERS["search_directories"](_search_req()).status_code == 401
+
+
+def test_search_missing_base_group_403(enforced, monkeypatch, sample_docs):
+    _mock_engine(monkeypatch, sample_docs)
+    resp = HANDLERS["search_directories"](_search_req(_principal(groups=["OTHER"])))
+    assert resp.status_code == 403
+
+
+def test_search_base_user_sees_public_only(enforced, monkeypatch, sample_docs):
+    captured = {}
+    docs, bm25 = search_core.load_engine_from_bytes(
+        search_core.build_artifact_bytes(sample_docs)[0])
+    monkeypatch.setattr(fa, "_engine",
+                        lambda keys: captured.update(keys=set(keys)) or (docs, bm25))
+    resp = HANDLERS["search_directories"](_search_req(_principal(groups=["BASE"])))
+    assert resp.status_code == 200
+    assert captured["keys"] == {"publication", "project"}  # no restricted
+
+
+def test_search_ihcc_entitled_gets_ihcc(enforced, monkeypatch, sample_docs):
+    captured = {}
+    docs, bm25 = search_core.load_engine_from_bytes(
+        search_core.build_artifact_bytes(sample_docs)[0])
+    monkeypatch.setattr(fa, "_engine",
+                        lambda keys: captured.update(keys=set(keys)) or (docs, bm25))
+    HANDLERS["search_directories"](_search_req(_principal(groups=["BASE", "G-IHCC"])))
+    assert "ihcc" in captured["keys"] and "ccdi" not in captured["keys"]
+
+
+def test_refresh_requires_admin(enforced, monkeypatch):
+    monkeypatch.setattr(fa, "rebuild_and_upload", lambda: {"records": 1})
+
+    def _refresh(principal_hdr=None):
+        headers = {"x-ms-client-principal": principal_hdr} if principal_hdr else {}
+        return HANDLERS["refresh_now"](func.HttpRequest(
+            method="POST", url="/api/refresh", headers=headers, params={}, body=b""))
+
+    assert _refresh().status_code == 401                                  # no principal
+    assert _refresh(_principal(groups=["BASE"])).status_code == 403       # not admin
+    assert _refresh(_principal(roles=["Agent.Admin"])).status_code == 200 # admin ok
