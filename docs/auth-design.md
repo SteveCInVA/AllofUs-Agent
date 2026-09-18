@@ -13,11 +13,19 @@ Access to datasets is entitlement-based and per user:
 This is per-user, need-to-know authorization, so the **end user's identity must
 flow to the service** — an app-only service principal cannot satisfy it.
 
+**Access is layered — "public" is not open to the internet.** Every request
+requires authentication *and* membership in the base entitlement group
+(`AoU-Agent-Users`); that base group is what gates "public" datasets. Restricted
+datasets require an *additional* per-dataset group on top of the base entitlement.
+So an unauthenticated caller gets `401`, an authenticated caller without the base
+group gets `403`, and "public" means "available to all entitled agent users," not
+"available to the general public."
+
 ## 2. Decisions (confirmed)
 | Decision | Choice |
 |---|---|
 | Identity | **Delegated Entra ID (OAuth 2.0 authorization-code)** on the connector |
-| Dataset entitlement | **One Entra security group per restricted dataset** |
+| Dataset entitlement | **One Entra security group per restricted dataset** (public datasets need no *dedicated* group — they are gated by the base entitlement below) |
 | Tiers | Binary per dataset: `public` or `restricted` (restricted = compartmented by dataset) |
 | Base entitlement | An Entra **group** (`AoU-Agent-Users`) required to use `/search` |
 | Refresh (HTTP) | Requires the **`Agent.Admin`** app role |
