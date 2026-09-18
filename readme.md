@@ -11,6 +11,8 @@ The agent searches four public sources for work similar to a description the use
 - Intial version:  2026-07-10
   - Updated:       2026-07-31 - Support cache refresh / expiration
   - Updated:       2026-09-15 - Improved handling of new datasets + added in IHCC and CCDI datasets.
+                              - Incorporated Security Model to handle public / restricted data handling
+                              - Updated documentation / deployment for configuration in Azure Commericial / GCC
 
 
 ## Assumptions:
@@ -22,7 +24,7 @@ The deployment code assumes:
 ## Cloud selection & pre-deployment confirmations
 
 This solution deploys to **Azure Commercial** or **Azure Government (GCC)**, selected
-by the `$cloud` variable at the top of `deploy_azure_infrastructure.ps1`
+by the `$cloud` variable at the top of `deploy_azure_infrastructure.txt`
 (`AzureCloud` or `AzureUSGovernment`). All cloud-specific endpoints (storage suffix,
 private-link DNS zones, portal/CORS, Entra authority, region) are derived from that
 one variable.
@@ -48,7 +50,7 @@ one variable.
 ### Azure Function
 
 #### Deployment Variables
-The following varaiables are defined in the top of the deploy_azure_infrastructure.ps1 file.  They represent the following configurations:
+The following varaiables are defined in the top of the deploy_azure_infrastructure.txt file.  They represent the following configurations:
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
@@ -67,7 +69,7 @@ The following varaiables are defined in the top of the deploy_azure_infrastructu
 
 #### Infrastructure Deployment Process
 
-The code used to deploy the infrastructure can be found in /deployment/deploy_azure_infrastructure.ps1
+The code used to deploy the infrastructure can be found in /deployment/deploy_azure_infrastructure.txt
 
 Deployment will perform the following:
 - Create a new resource group
@@ -121,17 +123,17 @@ After deploy, trigger a refresh (or wait for the daily 03:00 UTC timer) to build
 every dataset's index in Blob Storage:
 
 ```
-# POST /api/refresh  (see /deployment/testing_azure_functions.ps1)
+# POST /api/refresh  (see /deployment/testing_azure_functions.txt)
 ```
 
 When successfully deployed user will see the deployed functions and the URL associated to each.
 
 #### Testing
 
-Testing scrips can be found in /deployment/testing_azure_functions.ps1
+Testing scrips can be found in /deployment/testing_azure_functions.txt
 
 ##### Testing Variables
-The following parameters are defined in the /deployment/testing_azure_functions.ps1 file
+The following parameters are defined in the /deployment/testing_azure_functions.txt file
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
@@ -167,8 +169,8 @@ The service supports per-user, entitlement-based access. Design details are in
 When `true`, the claims-based checks above are enforced.
 
 **Setup**
-1. Deploy infrastructure (`deploy_azure_infrastructure.ps1`).
-2. Run [`deployment/deploy_entra_auth.ps1`](deployment/deploy_entra_auth.ps1) to create the
+1. Deploy infrastructure (`deploy_azure_infrastructure.txt`).
+2. Run [`deployment/deploy_entra_auth.txt`](deployment/deploy_entra_auth.txt) to create the
    API + client app registrations, the groups, the `Agent.Admin` role, Easy Auth
    (with `/api/health` excluded), a Key Vault for the connector secret, and the auth
    app settings. It leaves `AUTH_ENFORCED=false`.
