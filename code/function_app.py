@@ -9,8 +9,10 @@ Timer:
   refresh_timer           Daily (03:00 UTC) — rebuild the per-dataset indexes.
 
 Per-dataset caching (two levels):
-  1. Per-index cache  — {key: (docs, tokens, etag)} loaded from Blob (or the
-     packaged code/index/<key>.pkl first-run fallback), hot-reloaded by ETag.
+  1. Per-index cache  — {key: (docs, tokens, etag)} loaded from Blob Storage,
+     hot-reloaded by ETag. (A local code/index/<key>.pkl is used as a fallback for
+     local development; deployed packages ship no indexes — Blob is populated by
+     the first /api/refresh or the daily timer.)
   2. Per-entitlement engine cache — {sorted(keys): (docs, bm25, component etags)} —
      a merged BM25 engine over exactly the datasets a caller may see. Most callers
      share one signature, so the merged engine is built once and reused.

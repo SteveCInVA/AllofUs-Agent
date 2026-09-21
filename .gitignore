@@ -8,9 +8,10 @@ venv/
 .python_packages/
 local.settings.json
 
-# Note: code/corpus.pkl is intentionally tracked (first-run fallback snapshot)
+# Locally-built search indexes (not committed; populated in Blob by /api/refresh)
 code/index/*.pkl
 code/index/manifest.json
+code/corpus.pkl
 
 # Test artifacts
 .pytest_cache/

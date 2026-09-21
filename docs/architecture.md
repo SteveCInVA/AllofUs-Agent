@@ -91,15 +91,15 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    Q["GET /api/search"] --> ENG{"in-memory<br/>corpus loaded?"}
+    Q["GET /api/search"] --> ENG{"engine cached for<br/>caller's entitlements?"}
 
-    ENG -- "no, first call" --> L1{"blob snapshot<br/>exists?"}
-    L1 -- "yes" --> LB["load from Blob"]
-    L1 -- "no" --> LP["load packaged corpus.pkl"]
+    ENG -- "no, first call" --> L1{"entitled indexes<br/>in Blob?"}
+    L1 -- "yes" --> LB["load index/&lt;key&gt;.pkl<br/>for entitled datasets"]
+    L1 -- "no" --> LP["no data yet<br/>(await /api/refresh)"]
 
-    ENG -- "yes" --> STALE{"ETag changed?"}
-    STALE -- "yes" --> RB["reload from Blob"]
-    STALE -- "no" --> USE["use in-memory engine"]
+    ENG -- "yes" --> STALE{"any component<br/>ETag changed?"}
+    STALE -- "yes" --> RB["reload changed index"]
+    STALE -- "no" --> USE["use merged engine"]
 
     LB --> USE
     LP --> USE
@@ -111,9 +111,11 @@ flowchart TB
     TOP --> J["JSON results<br/>title + snippet + url"]
 ```
 
-Layers: **(1)** in-memory per worker, **(2)** Blob snapshot (refreshable without
-redeploy; ETag re-checked every `CORPUS_CHECK_SECONDS`), **(3)** packaged
-`corpus.pkl` first-run fallback. `_body` is never returned.
+Layers: **(1)** in-memory per-entitlement merged engine per worker, **(2)** per-dataset
+Blob indexes (`index/<key>.pkl`, refreshable without redeploy; ETags re-checked every
+`CORPUS_CHECK_SECONDS`). Deployed packages ship no indexes — Blob is populated by the
+first `/api/refresh` or the daily timer (a local `index/<key>.pkl` is a dev-only
+fallback). `_body` is never returned.
 
 ---
 
@@ -155,7 +157,7 @@ flowchart LR
     RAW["raw source data<br/>JSON / REST"] --> NORM["normalized record<br/>id, source, record_type,<br/>title, url, snippet, _body,<br/>+ source fields"]
     NORM --> STORE["stored record<br/>(minus _body)"]
     NORM --> TOK["BM25 tokens<br/>from _body"]
-    STORE --> CORP["corpus.pkl<br/>docs + tokens"]
+    STORE --> CORP["index/&lt;key&gt;.pkl<br/>docs + tokens"]
     TOK --> CORP
     CORP --> HIT["search result<br/>record + score"]
 ```

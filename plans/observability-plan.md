@@ -54,7 +54,7 @@ Insights sampling stanza, and the deploy currently passes `--disable-app-insight
 ## 4. Code changes required for effective logging
 1. **Fix silent excepts (highest value).** Add `logging.warning`/`logging.exception`
    in the swallowing blocks — `storage.py` (download_blob, get_blob_etag,
-   download_corpus/index, container create), `auth.py` (malformed principal →
+   download_blob_with_etag, container create), `auth.py` (malformed principal →
    warning), `feeds` fallbacks. Without this, storage/auth failures are invisible.
 2. **Structured custom dimensions.** Pass `extra={"custom_dimensions": {...}}` on key
    logs so they populate `customDimensions` for KQL. Minimal, no new dependency (the

@@ -62,7 +62,7 @@ def test_carry_source_absent_returns_empty(sample_docs):
 
 
 def test_build_artifact_to_disk(tmp_path, sample_docs):
-    out = tmp_path / "corpus.pkl"
+    out = tmp_path / "index.pkl"
     n = sc.build_artifact(sample_docs, str(out))
     assert n == len(sample_docs) and out.exists()
 

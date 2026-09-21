@@ -2,8 +2,8 @@
 Retrieval core for the All of Us "find similar work" agent.
 
 Source-agnostic: it turns a flat list of already-normalized record dicts (each
-produced by a Source.normalize) into a compact, version-portable artifact
-(corpus.pkl) and runs BM25 similarity search over it.
+produced by a Source.normalize) into a compact, version-portable per-dataset index
+artifact (`index/<key>.pkl`) and runs BM25 similarity search over one or more of them.
 
 The artifact stores ONLY builtin Python types (lists/dicts/strings) so it loads
 cleanly on any Python 3.8-3.12 runtime. The BM25 model is (re)built at cold

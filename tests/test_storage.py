@@ -110,22 +110,6 @@ def fake_store(monkeypatch):
     return store
 
 
-def test_upload_and_download_corpus(fake_store):
-    etag = storage.upload_corpus(b"corpusbytes")
-    assert etag == "etag-xyz"
-    data, etag2 = storage.download_corpus()
-    assert data == b"corpusbytes" and etag2 == "etag-xyz"
-
-
-def test_download_corpus_missing_returns_none(fake_store):
-    assert storage.download_corpus() == (None, None)
-
-
-def test_get_corpus_etag(fake_store):
-    storage.upload_corpus(b"x")
-    assert storage.get_corpus_etag() == "etag-xyz"
-
-
 def test_upload_download_named_blob(fake_store):
     storage.upload_blob("demo.docs.json", b"[1,2,3]")
     assert storage.download_blob("demo.docs.json") == b"[1,2,3]"

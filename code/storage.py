@@ -1,15 +1,15 @@
 """
-Azure Blob Storage helpers for the refreshable corpus snapshot.
+Azure Blob Storage helpers for the per-dataset search indexes.
 
-The built corpus (corpus.pkl bytes) is stored in a blob so the timer/on-demand
-refresh jobs can update it without redeploying, and every Function instance can
-reload the new snapshot. Uses the app's AzureWebJobsStorage account by default;
-override with CORPUS_STORAGE (connection string), CORPUS_CONTAINER, CORPUS_BLOB.
+Each dataset's index (`index/<key>.pkl`) and a manifest (`index/manifest.json`) are
+stored as blobs so the timer/on-demand refresh jobs can update them without
+redeploying, and every Function instance can reload changed indexes by ETag. Uses
+the app's AzureWebJobsStorage account by default; override with CORPUS_STORAGE
+(connection string) / CORPUS_STORAGE__accountName and CORPUS_CONTAINER.
 """
 import os
 
 CONTAINER = os.environ.get("CORPUS_CONTAINER", "cache")
-BLOB = os.environ.get("CORPUS_BLOB", "corpus.pkl")
 
 
 def _conn():
@@ -48,41 +48,6 @@ def _service():
     raise RuntimeError(
         "No storage connection configured "
         "(AzureWebJobsStorage/CORPUS_STORAGE connection string or __accountName).")
-
-
-def _blob_client(create=False):
-    svc = _service()
-    if create:
-        try:
-            svc.create_container(CONTAINER)
-        except Exception:  # noqa: BLE001  (already exists)
-            pass
-    return svc.get_container_client(CONTAINER).get_blob_client(BLOB)
-
-
-def upload_corpus(data: bytes) -> str:
-    """Upload the snapshot bytes, overwriting any existing blob. Returns ETag."""
-    bc = _blob_client(create=True)
-    bc.upload_blob(data, overwrite=True)
-    return bc.get_blob_properties().etag
-
-
-def download_corpus():
-    """Return (bytes, etag) for the current snapshot, or (None, None) if absent."""
-    try:
-        bc = _blob_client()
-        stream = bc.download_blob()
-        return stream.readall(), stream.properties.etag
-    except Exception:  # noqa: BLE001  (missing blob / no storage)
-        return None, None
-
-
-def get_corpus_etag():
-    """Return the current blob ETag, or None if it doesn't exist."""
-    try:
-        return _blob_client().get_blob_properties().etag
-    except Exception:  # noqa: BLE001
-        return None
 
 def upload_blob(name: str, data: bytes) -> str:
     svc = _service()

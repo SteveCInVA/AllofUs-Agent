@@ -1,9 +1,9 @@
 flowchart TB
     Q["GET /api/search"] --> ENG{"in-memory<br/>corpus loaded?"}
 
-    ENG -- "no, first call" --> L1{"blob snapshot<br/>exists?"}
-    L1 -- "yes" --> LB["load from Blob"]
-    L1 -- "no" --> LP["load packaged corpus.pkl"]
+    ENG -- "no, first call" --> L1{"index in<br/>Blob?"}
+    L1 -- "yes" --> LB["load index/&lt;key&gt;.pkl"]
+    L1 -- "no" --> LP["no data yet<br/>(await /api/refresh)"]
 
     ENG -- "yes" --> STALE{"ETag changed?"}
     STALE -- "yes" --> RB["reload from Blob"]
