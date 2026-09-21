@@ -171,9 +171,29 @@ az ad sp create --id "<API-APP-ID>"     # materializes the enterprise applicatio
 > `az ad sp create --id <API-APP-ID>`, and redo the step-5 group assignments and the
 > Agent.Admin role assignment (see *Assign users & entitlements*).
 
-In **Entra admin center → Enterprise applications → `AllOfUs-Function-API` → Users and groups**:
+Back in the **enterprise application** `AllOfUs-Function-API` (its *Users and groups* is
+where assignments live, but do the assignment via CLI as shown — the portal can't pick
+the right role here):
 
-5. **Add** all three groups — `AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI` — with the **Default Access** role (not `Agent.Admin`). This creates an app-role assignment linking each group to the service principal, and the *filtered* groups claim from step 3 (**Groups assigned to the application**) emits **only** groups assigned here. Skip it and members' tokens carry no group IDs, so `/search` returns 403 for everyone. *(CLI equivalent: `POST /groups/<group-id>/appRoleAssignments` with `resourceId` = the API service principal's object id and `appRoleId` = the all-zeros Default Access role `00000000-0000-0000-0000-000000000000`.)*
+**Assign the three groups to the application** (`AoU-Agent-Users`, `AoU-DS-IHCC`,
+`AoU-DS-CCDI`) so the filtered groups claim emits them:
+
+5. The groups claim emits any group **assigned to the application**, regardless of which role the assignment uses — but it must **not** be `Agent.Admin` (that would make every member an admin). Use the no-privilege **Default Access** role (app role id `00000000-0000-0000-0000-000000000000`).
+
+   ⚠️ Because the app now exposes the `Agent.Admin` app role, the portal's *Enterprise applications → Users and groups → Add → Select a role* pane offers **only `Agent.Admin`** — "Default Access" is hidden once a user-assignable role exists. So assign the groups with the CLI instead of the portal:
+
+   ```powershell
+   $apiSp = az ad sp show --id "<API-APP-ID>" --query id -o tsv
+   foreach ($g in "AoU-Agent-Users","AoU-DS-IHCC","AoU-DS-CCDI") {
+     $gid  = az ad group show --group $g --query id -o tsv
+     $body = @{ principalId=$gid; resourceId=$apiSp; appRoleId="00000000-0000-0000-0000-000000000000" } | ConvertTo-Json -Compress
+     $f = New-TemporaryFile; Set-Content $f.FullName $body -Encoding ascii
+     az rest --method POST --uri "https://graph.microsoft.com/v1.0/groups/$gid/appRoleAssignments" --headers "Content-Type=application/json" --body "@$($f.FullName)"
+     Remove-Item $f.FullName
+   }
+   ```
+
+   Verify with `az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" --query "value[].{who:principalDisplayName, appRoleId:appRoleId}" -o table`. Skip this and members' tokens carry no group IDs, so `/search` returns 403 for everyone. (GCC: use `graph.microsoft.us`.)
 
 On the **Function app → Settings → Authentication** blade (the deploy script already
 configures this via `config/authsettingsV2` — **verify only**):
