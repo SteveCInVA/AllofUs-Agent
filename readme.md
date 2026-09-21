@@ -126,9 +126,26 @@ Deployment will perform the following:
 
 `deploy_azure_infrastructure.ps1` creates the two app registrations, the three security
 groups, the `Agent.Admin` role **name**, Key Vault, Easy Auth, and all app settings — but
-a few app-registration **manifest** items are left to finish by hand (the script marks
-each one inline). Do these **once per environment**, using the `API appId` / `Client appId`
-printed in the deploy summary.
+a few identity items are left to finish by hand (the script marks each one inline). Do
+these **once per environment**, using the `API appId` / `Client appId` printed in the
+deploy summary.
+
+> **App registration vs. enterprise application.** Each app is two Entra objects: the
+> **app registration** (the global *definition* — exposed scopes, app roles, the groups
+> claim) and the **enterprise application** / *service principal* (the local instance in
+> your tenant, where **user/group assignments** live). Steps 1–4 below edit the app
+> registration; step 5 uses the enterprise application. Both show the name
+> `AllOfUs-Function-API` and are linked by the app ID.
+
+**First, create the service principal.** The deploy script provisions the API with
+`az ad app create`, which creates only the app-registration object — **not** the service
+principal — so `AllOfUs-Function-API` does **not** yet appear under *Enterprise
+applications*. Create it now (this also unblocks step 5 and the *Assign users &
+entitlements* phase, both of which need the service principal to exist):
+
+```powershell
+az ad sp create --id "<API-APP-ID>"     # materializes the enterprise application
+```
 
 In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
 
@@ -141,14 +158,15 @@ In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
 
 In **Entra admin center → Enterprise applications → `AllOfUs-Function-API` → Users and groups**:
 
-5. **Add** all three groups — `AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI` (Default Access). Assigning them here is what makes the *filtered* groups claim from step 3 actually emit them into tokens.
+5. **Add** all three groups — `AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI` — with the **Default Access** role (not `Agent.Admin`). This creates an app-role assignment linking each group to the service principal, and the *filtered* groups claim from step 3 (**Groups assigned to the application**) emits **only** groups assigned here. Skip it and members' tokens carry no group IDs, so `/search` returns 403 for everyone. *(CLI equivalent: `POST /groups/<group-id>/appRoleAssignments` with `resourceId` = the API service principal's object id and `appRoleId` = the all-zeros Default Access role `00000000-0000-0000-0000-000000000000`.)*
 
 On the **Function app → Settings → Authentication** blade:
 
 6. Edit the Microsoft identity provider and set **Excluded paths** = `/api/health` so the anonymous health check works. Everything else stays behind Easy Auth (`Return401`).
 
-> All six items can also be scripted with `az rest` PATCH calls against the app manifest,
-> but the portal path above is the reliable default and only runs once.
+> The scope, app role, and groups claim can also be scripted with `az rest` PATCH calls
+> against the app manifest, but the portal path above is the reliable default and only
+> runs once per environment.
 
 #### Function Code Deployment
 
@@ -179,7 +197,7 @@ effect on a **new** token, so sign out/in — or request a fresh token — after
 ```powershell
 $apiApp = "<API-APP-ID>"                                # from the deploy summary
 $me     = az ad signed-in-user show --query id -o tsv   # or: az ad user show --id <upn> --query id -o tsv
-$apiSp  = az ad sp show --id $apiApp --query id -o tsv   # API enterprise-app (service principal) object id
+$apiSp  = az ad sp show --id $apiApp --query id -o tsv   # API service principal (created in phase 4) object id
 
 # Groups -> `groups` claim
 az ad group member add --group "AoU-Agent-Users" --member-id $me   # base: required for /search
