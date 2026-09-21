@@ -20,6 +20,9 @@ The deployment code assumes:
 - Active Azure Subscription
 - Access to the AzureCLI
 - Permissions to a subscription that may create a resource group and required objects.
+- **Azure Functions Core Tools (`func`)** and **Python 3.12** installed locally (for code publish / optional local index build).
+- **Entra directory permissions** to create app registrations, security groups, and app-role assignments — **Application Administrator + Groups Administrator**, or **Global Administrator**.
+- For GCC: a matching **GCC Power Platform** environment, and substitute the government endpoints where noted (`graph.microsoft.us`, `portal.azure.us`, `.azurewebsites.us`).
 
 ## Cloud selection & pre-deployment confirmations
 
@@ -46,6 +49,27 @@ one variable.
 > See `docs/multi-cloud-deployment.md` for the full multi-cloud reference.
 
 ## Deployment steps
+
+> This is a **greenfield** deployment: it provisions everything from an empty
+> subscription — infrastructure, the Entra identity/entitlement model, code, data, and
+> the Copilot Studio agent. Perform the phases **in order**; several Entra steps must be
+> finished before the app will authenticate, and the app has **no searchable data** until
+> the first refresh is run.
+
+### Deployment overview
+
+1. **Prerequisites** — tooling and Entra permissions (see *Assumptions* above).
+2. **Set deployment variables** in `deploy_azure_infrastructure.ps1`.
+3. **Deploy infrastructure + identity** — run the script.
+4. **Finish the API app registration** — expose scope, create the `Agent.Admin` app role, add the groups claim, authorize the groups/clients, exclude `/api/health` from Easy Auth. *(manual — the script stubs these)*
+5. **Publish the function code.**
+6. **Assign users & entitlements** — groups + the `Agent.Admin` role.
+7. **Load data** — run the first `/api/refresh` (or wait for the daily 03:00 UTC timer).
+8. **Test** the `/health`, `/refresh`, and `/search` endpoints.
+9. **Import the custom connector** in Copilot Studio.
+10. **Build the Copilot Studio agent.**
+
+---
 
 ### Azure Function
 
@@ -98,35 +122,99 @@ Deployment will perform the following:
 - Update Azure Function to use system assigned managed identity to access storage account
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
 
+#### Configure the Entra identity (required before publish/test)
+
+`deploy_azure_infrastructure.ps1` creates the two app registrations, the three security
+groups, the `Agent.Admin` role **name**, Key Vault, Easy Auth, and all app settings — but
+a few app-registration **manifest** items are left to finish by hand (the script marks
+each one inline). Do these **once per environment**, using the `API appId` / `Client appId`
+printed in the deploy summary.
+
+In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
+
+1. **Expose an API** — confirm the Application ID URI is `api://<API-APP-ID>` (set by the script), then **Add a scope**: name `access_as_user`, *Who can consent* **Admins and users**, and enable it.
+2. **App roles → Create app role** — display name `Agent.Admin`, *Allowed member types* **Users/Groups**, value **`Agent.Admin`**, enabled. *(this app role gates `POST /api/refresh`)*
+3. **Token configuration → Add groups claim** — choose **Groups assigned to the application** (filtered — keeps tokens small) and include it in the **Access** token.
+4. **Expose an API → Authorized client applications → Add a client application** — authorize each of these for the `access_as_user` scope:
+   - the connector client `<CLIENT-APP-ID>` (`AllOfUs-Function-Client`), and
+   - *(only if you'll call `/api/refresh` from the Azure CLI as shown later)* the **Azure CLI**, appId `04b07795-8ddb-461a-bbee-02f9e1bf7b46`.
+
+In **Entra admin center → Enterprise applications → `AllOfUs-Function-API` → Users and groups**:
+
+5. **Add** all three groups — `AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI` (Default Access). Assigning them here is what makes the *filtered* groups claim from step 3 actually emit them into tokens.
+
+On the **Function app → Settings → Authentication** blade:
+
+6. Edit the Microsoft identity provider and set **Excluded paths** = `/api/health` so the anonymous health check works. Everything else stays behind Easy Auth (`Return401`).
+
+> All six items can also be scripted with `az rest` PATCH calls against the app manifest,
+> but the portal path above is the reliable default and only runs once.
+
 #### Function Code Deployment
 
-Use the same window that the infrastructure deployment completed in.
-
-> **Note:** Code build / deploy takes ~5 minutes
-
-Optionally, generate the packaged first-run indexes before publishing so the agent
-works immediately after deploy (restricted datasets are never packaged):
-
-```
-cd /code
-python build_index.py --public      # packages public datasets to code/index/*.pkl
-```
-
-Then publish:
+Use the same window that the infrastructure deployment completed in, then publish the
+code (the build runs remotely; ~5 minutes):
 
 ```
 cd /code
 func azure functionapp publish $functionSvcName --build remote
 ```
 
-After deploy, trigger a refresh (or wait for the daily 03:00 UTC timer) to build
-every dataset's index in Blob Storage:
+> Deployed packages intentionally ship **no** search indexes — not even public ones — so
+> restricted data can never be packaged. The app loads every dataset from Blob Storage on
+> the first refresh (step 7). Running `python build_index.py --public` only populates a
+> **local** `code/index/` for offline development; that folder is excluded from the
+> deployment package.
 
-```
-# POST /api/refresh  (see /deployment/testing_azure_functions.ps1)
+When the publish completes you'll see the deployed functions and their URLs. **The app
+has no searchable data yet** — you load it in step 7 below. First assign entitlements
+(step 6) so you can authenticate, then run the first refresh.
+
+#### Assign users & entitlements
+
+Entitlements are Entra **group memberships** (the `groups` claim) plus the **`Agent.Admin`
+app role** (the `roles` claim). Assign your test user(s). Group/role changes only take
+effect on a **new** token, so sign out/in — or request a fresh token — afterward.
+
+```powershell
+$apiApp = "<API-APP-ID>"                                # from the deploy summary
+$me     = az ad signed-in-user show --query id -o tsv   # or: az ad user show --id <upn> --query id -o tsv
+$apiSp  = az ad sp show --id $apiApp --query id -o tsv   # API enterprise-app (service principal) object id
+
+# Groups -> `groups` claim
+az ad group member add --group "AoU-Agent-Users" --member-id $me   # base: required for /search
+az ad group member add --group "AoU-DS-IHCC"     --member-id $me   # optional: unlock IHCC data
+az ad group member add --group "AoU-DS-CCDI"     --member-id $me   # optional: unlock CCDI data
+
+# Agent.Admin app role -> `roles` claim (required for /refresh)
+$roleId = az ad app show --id $apiApp --query "appRoles[?value=='Agent.Admin'].id | [0]" -o tsv
+az rest --method POST `
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" `
+  --body (@{ principalId = $me; resourceId = $apiSp; appRoleId = $roleId } | ConvertTo-Json)
 ```
 
-When successfully deployed user will see the deployed functions and the URL associated to each.
+> **GCC:** use `https://graph.microsoft.us` for the `az rest` URI. To entitle many users,
+> add them to the groups (and assign the role to a group instead of each user).
+
+#### Load data (first refresh)
+
+Deployed packages ship no index data, so populate Blob Storage by running one refresh (or
+wait for the daily **03:00 UTC** timer). `/api/refresh` requires the `Agent.Admin` role.
+
+```powershell
+$sfx = "aou1234"                                        # same suffix used at deploy
+$app = "func-allofus-$sfx"
+$uri = "https://$app.azurewebsites.net/api"             # .azurewebsites.us on GCC
+
+$token   = az account get-access-token --resource "api://$apiApp" --query accessToken -o tsv
+$headers = @{ Authorization = "Bearer $token" }
+
+# SLOW: the first refresh pulls all four sources; CCDI alone adds ~4 min.
+Invoke-RestMethod -Method Post -Uri "$uri/refresh" -Headers $headers | ConvertTo-Json -Depth 6
+```
+
+A source that is temporarily unavailable keeps its previous index (never blanked), so a
+partial refresh won't wipe good data.
 
 #### Testing
 
@@ -146,6 +234,22 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 - Health - anonymous; returns every dataset (including restricted ones) with its name, classification, and record count, read from the manifest (`index/manifest.json`)
 - Refresh - rebuilds each dataset's index and the manifest; a source that is temporarily unavailable keeps its previous index (never blanked). Requires the Admin role when `AUTH_ENFORCED=true`
 - Search - Executes a basic query and displays results (trimmed to the caller's entitled datasets when `AUTH_ENFORCED=true`)
+
+**Expected results after a successful first refresh**
+
+- `/health` (anonymous) enumerates every dataset with name, classification, and record count — roughly `publication ~1432`, `project ~25898`, `ihcc 87`, `ccdi ~309` (CCDI varies as member nodes come and go).
+- `/search` returns public (`publication`/`project`) results for any `AoU-Agent-Users` member, and adds `ihcc`/`ccdi` rows only for members of those groups.
+- `/refresh` returns a per-dataset summary with status `200`.
+
+**Troubleshooting**
+
+| Symptom | Cause / fix |
+|---|---|
+| `az account get-access-token` → `AADSTS65001` (consent required) | Azure CLI not authorized on the API scope — do step 4.4, or run `az login --scope api://<API-APP-ID>/access_as_user` once. |
+| `/search` → `403` base group required | Groups claim not emitting (steps 4.3–4.5) or the token predates the group assignment. Get a fresh token. |
+| `/refresh` → `403` Admin role required | `Agent.Admin` not assigned (step 6) or a stale token. |
+| `/refresh` → `500` on IHCC/CCDI | Outbound egress to the three public data domains is blocked (see the GCC egress caveat above). |
+| `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (step 4.6). |
 
 ## Authentication & Authorization
 
@@ -170,20 +274,26 @@ The deployment sets `AUTH_ENFORCED=true`. (The flag exists so the code can run w
 Easy Auth for **local development** — `local.settings.json` sets it `false` — but
 deployed environments always enforce.)
 
-**Setup** — all of this is done by `deploy_azure_infrastructure.ps1` in one run:
-creates the API + client app registrations, the groups (`AoU-Agent-Users`,
-`AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, Easy Auth (with `/api/health`
-excluded), a Key Vault for the connector secret, and the auth app settings. After it
-runs (and the code is published):
+**Setup** — `deploy_azure_infrastructure.ps1` provisions the API + client app
+registrations, the groups (`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`), the
+`Agent.Admin` role name, Easy Auth, a Key Vault for the connector secret, and the auth
+app settings. A few app-registration manifest items and **all** user/entitlement
+assignments are finished after the run — the full, ordered procedure is in
+**Deployment steps** above:
 
-1. **Assign users** to `AoU-Agent-Users` (base) and to `AoU-DS-IHCC` / `AoU-DS-CCDI`
-   as needed; grant the `Agent.Admin` app role to admins.
-2. **Load data:** POST `/api/refresh` with an Entra bearer token (an admin), or wait
-   for the daily 03:00 UTC timer. Public datasets are already available from the
-   packaged indexes; restricted datasets appear after the first refresh.
-3. **Import the connector** (`custom_connector/openapi-swagger.yaml`, delegated Entra
-   OAuth 2.0) in Copilot Studio and create the connection with the client app's ID +
-   the secret from Key Vault.
+1. *Configure the Entra identity* — expose the `access_as_user` scope, create the
+   `Agent.Admin` app role, add the groups claim, authorize the groups/clients, and
+   exclude `/api/health` from Easy Auth.
+2. *Assign users & entitlements* — add users to `AoU-Agent-Users` (base) and to
+   `AoU-DS-IHCC` / `AoU-DS-CCDI` as needed; grant admins the `Agent.Admin` app role.
+3. *Load data (first refresh)* — POST `/api/refresh` with an admin bearer token, or wait
+   for the daily 03:00 UTC timer.
+4. *Import the connector* (`custom_connector/openapi-swagger.yaml`, delegated Entra
+   OAuth 2.0) in Copilot Studio and create the connection with the client app's ID + the
+   secret from Key Vault.
+
+> Deployed packages ship **no** index data (not even public datasets), so nothing is
+> searchable until the first refresh populates Blob Storage.
 
 ## Custom Connector (AKA Copilot Studio Tools)
 
