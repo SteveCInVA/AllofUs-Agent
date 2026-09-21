@@ -268,6 +268,7 @@ $authFile = New-TemporaryFile
 Set-Content -Path $authFile.FullName -Value $authJson -Encoding utf8
 az rest --method put `
   --url "$armBase/subscriptions/$subId/resourceGroups/$rg/providers/Microsoft.Web/sites/$functionSvcName/config/authsettingsV2?api-version=2022-03-01" `
+  --headers "Content-Type=application/json" `
   --body "@$($authFile.FullName)"
 Remove-Item $authFile.FullName -Force
 

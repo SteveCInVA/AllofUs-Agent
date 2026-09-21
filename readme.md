@@ -214,9 +214,17 @@ az ad group member add --group "AoU-DS-CCDI"     --member-id $me   # optional: u
 
 # Agent.Admin app role -> `roles` claim (required for /refresh)
 $roleId = az ad app show --id $apiApp --query "appRoles[?value=='Agent.Admin'].id | [0]" -o tsv
+
+# az rest POST/PATCH to Graph must declare Content-Type, and inline JSON is fragile
+# under PowerShell quoting -> write the body to a temp file and pass it with @.
+$assignment = @{ principalId = $me; resourceId = $apiSp; appRoleId = $roleId } | ConvertTo-Json -Compress
+$bodyFile = New-TemporaryFile
+Set-Content -Path $bodyFile.FullName -Value $assignment -Encoding ascii
 az rest --method POST `
   --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" `
-  --body (@{ principalId = $me; resourceId = $apiSp; appRoleId = $roleId } | ConvertTo-Json)
+  --headers "Content-Type=application/json" `
+  --body "@$($bodyFile.FullName)"
+Remove-Item $bodyFile.FullName -Force
 ```
 
 > **GCC:** use `https://graph.microsoft.us` for the `az rest` URI. To entitle many users,
