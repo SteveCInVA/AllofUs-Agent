@@ -5,8 +5,8 @@
 ##################################
 
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo01"
-$sfx = "aou1234"
+$rg  = "rg-allofus-demo21"
+$sfx = "aou0921"
 $app = "func-allofus-$sfx"
 $apiAppId = "<API-APP-ID>"     # AllOfUs-Function-API appId from the deployment output
 
@@ -29,7 +29,7 @@ $headers = @{
 }
 
 ##########################################
-# Health (anonymous) — enumerates every dataset with name + record count
+# Health (anonymous) - enumerates every dataset with name + record count
 ##########################################
 
 $health_uri = "$uri/health"

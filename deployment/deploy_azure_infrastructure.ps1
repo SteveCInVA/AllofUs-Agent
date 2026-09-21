@@ -1,4 +1,4 @@
-# NIH All of Us — Greenfield deployment (infrastructure + identity)
+# NIH All of Us - Greenfield deployment (infrastructure + identity)
 #
 # Stands up the whole solution from scratch in one run: resource group, Entra app
 # registrations + groups + admin role, VNet + private endpoints, storage, Function
@@ -69,7 +69,7 @@ az group create --name $rg --location $loc
 $apiApp = az ad app create --display-name "AllOfUs-Function-API" --query appId -o tsv
 az ad app update --id $apiApp --identifier-uris "api://$apiApp"
 # Add the delegated scope `access_as_user` (Expose an API) and the `$adminRole` app
-# role (allowedMemberTypes ["User"]). These use the app manifest — easiest in the
+# role (allowedMemberTypes ["User"]). These use the app manifest - easiest in the
 # portal (App registrations > Expose an API / App roles) or via `az ad app update
 # --set` with a JSON manifest.
 
@@ -170,7 +170,7 @@ foreach ($service in @("queue", "table")) {
 }
 
 # ============================================================ 6. Key Vault (connector secret)
-# NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets — being
+# NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets - being
 # subscription Owner is control-plane only. Grant the deployer "Key Vault Secrets Officer"
 # and wait for propagation before writing. If your subscription enforces an Azure Policy that
 # disables Key Vault public network access, the write below fails (ForbiddenByConnection); the
@@ -284,7 +284,7 @@ Write-Output "  API appId:    $apiApp"
 if ($kvSecretStored) {
   Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
 } else {
-  Write-Output "  Client appId: $clientApp   (secret NOT stored in Key Vault — see the warning above; store it in the connector manually)"
+  Write-Output "  Client appId: $clientApp   (secret NOT stored in Key Vault - see the warning above; store it in the connector manually)"
 }
 Write-Output "  Base group:   $baseGroup (AoU-Agent-Users)"
 Write-Output "  IHCC group:   $ihccGroup (AoU-DS-IHCC)"

@@ -8,10 +8,10 @@
       Function App) and, by default, purges the soft-deleted Key Vault so its name is
       not left reserved;
     - the Entra app registrations (AllOfUs-Function-API / AllOfUs-Function-Client, and
-      their service principals) and the three security groups — including any DUPLICATES
+      their service principals) and the three security groups - including any DUPLICATES
       left behind by earlier deploys (az ad *create allows duplicate display names).
 
-  It does NOT touch the Power Platform custom connector or the Copilot Studio agent —
+  It does NOT touch the Power Platform custom connector or the Copilot Studio agent -
   delete those by hand in the environment you built them in.
 
   Set $cloud / $rg / $sfx below to match the deployment you are removing.
@@ -39,7 +39,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 ##################################################
-# Config — MUST match the deployment you are tearing down
+# Config - MUST match the deployment you are tearing down
 # (mirror deploy_azure_infrastructure.ps1)
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
 $rg    = "rg-allofus-demo21"
