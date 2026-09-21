@@ -137,16 +137,6 @@ deploy summary.
 > registration; step 5 uses the enterprise application. Both show the name
 > `AllOfUs-Function-API` and are linked by the app ID.
 
-**First, create the service principal.** The deploy script provisions the API with
-`az ad app create`, which creates only the app-registration object — **not** the service
-principal — so `AllOfUs-Function-API` does **not** yet appear under *Enterprise
-applications*. Create it now (this also unblocks step 5 and the *Assign users &
-entitlements* phase, both of which need the service principal to exist):
-
-```powershell
-az ad sp create --id "<API-APP-ID>"     # materializes the enterprise application
-```
-
 In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
 
 1. **Expose an API** — confirm the Application ID URI is `api://<API-APP-ID>` (set by the script), then **Add a scope**:
@@ -162,6 +152,24 @@ In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
 4. **Expose an API → Authorized client applications → Add a client application** — authorize each of these for the `access_as_user` scope:
    - the connector client `<CLIENT-APP-ID>` (`AllOfUs-Function-Client`), and
    - *(only if you'll call `/api/refresh` from the Azure CLI as shown later)* the **Azure CLI**, appId `04b07795-8ddb-461a-bbee-02f9e1bf7b46`.
+
+**Now create the service principal** (the enterprise application). The deploy script uses
+`az ad app create`, which creates only the app-registration object — *not* the service
+principal — so `AllOfUs-Function-API` does not yet appear under *Enterprise applications*.
+Create it **after** the scope and app role above exist, so its copy of the app roles
+includes `Agent.Admin`:
+
+```powershell
+az ad sp create --id "<API-APP-ID>"     # materializes the enterprise application
+```
+
+> ⚠️ **Order matters.** If the service principal is created *before* the `Agent.Admin` app
+> role is defined, its copy of the roles is stale and the access token emits the role's
+> **GUID** instead of the value `Agent.Admin` — so `/api/refresh` returns 403 even though
+> the role is "assigned". If that happens, recreate it:
+> `az ad sp delete --id (az ad sp show --id <API-APP-ID> --query id -o tsv)` then
+> `az ad sp create --id <API-APP-ID>`, and redo the step-5 group assignments and the
+> Agent.Admin role assignment (see *Assign users & entitlements*).
 
 In **Entra admin center → Enterprise applications → `AllOfUs-Function-API` → Users and groups**:
 
@@ -282,6 +290,7 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 | `az account get-access-token` → `AADSTS65001` (consent required) | Azure CLI not authorized on the API scope — do step 4.4, or run `az login --scope api://<API-APP-ID>/access_as_user` once. |
 | `/search` → `403` base group required | Groups claim not emitting (steps 4.3–4.5) or the token predates the group assignment. Get a fresh token. |
 | `/refresh` → `403` Admin role required | `Agent.Admin` not assigned (step 6) or a stale token. |
+| `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows a **GUID** (not `Agent.Admin`) | The enterprise app (service principal) was created **before** the app role was defined, so its role copy is stale and emits the ID. Recreate the SP (`az ad sp delete` then `az ad sp create`), redo the group + role assignments, and get a fresh token. |
 | `/refresh` → `500` on IHCC/CCDI | Outbound egress to the three public data domains is blocked (see the GCC egress caveat above). |
 | `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (step 4.6). |
 
