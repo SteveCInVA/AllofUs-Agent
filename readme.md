@@ -158,7 +158,7 @@ In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
    - **User consent description**: `Allow the app to call the All of Us Research Finder API as you, returning only the research datasets you are entitled to see.`
    - **State**: **Enabled**
 2. **App roles → Create app role** — display name `Agent.Admin`, *Allowed member types* **Users/Groups**, value **`Agent.Admin`**, enabled. *(this app role gates `POST /api/refresh`)*
-3. **Token configuration → Add groups claim** — choose **Groups assigned to the application** (filtered — keeps tokens small) and include it in the **Access** token.
+3. **Token configuration → Add groups claim** — select **Groups assigned to the application** (filtered — keeps tokens small). The dialog then shows checkboxes for which token *types* carry the claim (**ID**, **Access**, **SAML**) — **tick "Access token"**. This is required because the connector calls the API with an **access token**, and Easy Auth reads the caller's groups from that access token (via `X-MS-CLIENT-PRINCIPAL`); if the claim rode only in the ID token, `auth.py` would see no groups and `/search` would 403. (Ticking ID token as well is harmless.)
 4. **Expose an API → Authorized client applications → Add a client application** — authorize each of these for the `access_as_user` scope:
    - the connector client `<CLIENT-APP-ID>` (`AllOfUs-Function-Client`), and
    - *(only if you'll call `/api/refresh` from the Azure CLI as shown later)* the **Azure CLI**, appId `04b07795-8ddb-461a-bbee-02f9e1bf7b46`.
