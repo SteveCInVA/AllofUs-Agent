@@ -149,7 +149,14 @@ az ad sp create --id "<API-APP-ID>"     # materializes the enterprise applicatio
 
 In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
 
-1. **Expose an API** — confirm the Application ID URI is `api://<API-APP-ID>` (set by the script), then **Add a scope**: name `access_as_user`, *Who can consent* **Admins and users**, and enable it.
+1. **Expose an API** — confirm the Application ID URI is `api://<API-APP-ID>` (set by the script), then **Add a scope**:
+   - **Scope name**: `access_as_user`
+   - **Who can consent**: **Admins and users**
+   - **Admin consent display name**: `Access the All of Us Research Finder API as the signed-in user`
+   - **Admin consent description**: `Allow the app to call the All of Us Research Finder API on behalf of the signed-in user, returning only the datasets that user is entitled to.`
+   - **User consent display name**: `Access the All of Us Research Finder on your behalf`
+   - **User consent description**: `Allow the app to call the All of Us Research Finder API as you, returning only the research datasets you are entitled to see.`
+   - **State**: **Enabled**
 2. **App roles → Create app role** — display name `Agent.Admin`, *Allowed member types* **Users/Groups**, value **`Agent.Admin`**, enabled. *(this app role gates `POST /api/refresh`)*
 3. **Token configuration → Add groups claim** — choose **Groups assigned to the application** (filtered — keeps tokens small) and include it in the **Access** token.
 4. **Expose an API → Authorized client applications → Add a client application** — authorize each of these for the `access_as_user` scope:
