@@ -13,8 +13,8 @@
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo18"
-$sfx = "aou0918"
+$rg  = "rg-allofus-demo21"
+$sfx = "aou0921"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"
@@ -170,11 +170,37 @@ foreach ($service in @("queue", "table")) {
 }
 
 # ============================================================ 6. Key Vault (connector secret)
-az keyvault create --name $kvName --resource-group $rg --enable-rbac-authorization true
-az keyvault secret set --vault-name $kvName --name "connector-client-secret" --value $clientSecret
+# NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets — being
+# subscription Owner is control-plane only. Grant the deployer "Key Vault Secrets Officer"
+# and wait for propagation before writing. If your subscription enforces an Azure Policy that
+# disables Key Vault public network access, the write below fails (ForbiddenByConnection); the
+# script then prints the secret so you can store it manually and the deploy still completes.
+az keyvault create --name $kvName --resource-group $rg `
+  --enable-rbac-authorization true `
+  --public-network-access Enabled
 $kvId = az keyvault show --name $kvName --query id -o tsv
+
+$deployer = az ad signed-in-user show --query id -o tsv 2>$null
+if ($deployer) {
+  az role assignment create --assignee-object-id $deployer --assignee-principal-type User `
+    --role "Key Vault Secrets Officer" --scope $kvId
+}
 az role assignment create --assignee-object-id $sami --assignee-principal-type ServicePrincipal `
   --role "Key Vault Secrets User" --scope $kvId
+
+Write-Output "Waiting 30s for Key Vault RBAC to propagate..."
+Start-Sleep -Seconds 30
+
+$kvSecretStored = $false
+az keyvault secret set --vault-name $kvName --name "connector-client-secret" --value $clientSecret -o none 2>$null
+if ($LASTEXITCODE -eq 0) {
+  $kvSecretStored = $true
+  Write-Output "Stored connector-client-secret in Key Vault '$kvName'."
+} else {
+  Write-Warning "Could not write the secret to Key Vault '$kvName' (public network access may be disabled by policy, or RBAC has not yet propagated)."
+  Write-Warning "Store this connector client secret manually in the Power Platform connection:"
+  Write-Output "  connector-client-secret = $clientSecret"
+}
 
 # ============================================================ 7. App settings
 # Use managed identity for AzureWebJobsStorage (identity-based, per-cloud service URIs)
@@ -204,16 +230,46 @@ az functionapp config appsettings set --resource-group $rg --name $functionSvcNa
       "BASE_ENTITLEMENT_GROUP_ID=$baseGroup" `
       "DATASET_CLASSIFICATION=$datasetClassification"
 
-# ============================================================ 8. Easy Auth (Entra)
-# Require a valid Entra token for all routes; the app declares /api/health anonymous.
-az webapp auth update --resource-group $rg --name $functionSvcName `
-  --enabled true `
-  --action Return401 `
-  --aad-allowed-token-audiences "api://$apiApp" `
-  --aad-token-issuer-url "$authorityHost/$tenantId/v2.0" `
-  --aad-client-id $apiApp
-# Exclude the health endpoint from platform authentication (portal: Authentication >
-# Edit > Excluded paths = /api/health, OR set globalValidation.excludedPaths via az rest).
+# ============================================================ 8. Easy Auth (Entra, authV2)
+# Require a valid Entra token on every route except /api/health, returning 401 (not a login
+# redirect) to unauthenticated callers. Configured directly against config/authsettingsV2 via
+# ARM REST: the classic `az webapp auth update --action` interface cannot express Return401,
+# and the authV2 CLI subcommands (az webapp auth microsoft) are not present in every az build.
+# The JSON is hand-authored (not ConvertTo-Json) so single-element arrays serialize as arrays
+# under Windows PowerShell 5.1 as well as PowerShell 7.
+$armBase = (az cloud show --query "endpoints.resourceManager" -o tsv).TrimEnd("/")
+$subId   = az account show --query id -o tsv
+$authJson = @"
+{
+  "properties": {
+    "platform": { "enabled": true },
+    "globalValidation": {
+      "requireAuthentication": true,
+      "unauthenticatedClientAction": "Return401",
+      "excludedPaths": [ "/api/health" ]
+    },
+    "identityProviders": {
+      "azureActiveDirectory": {
+        "enabled": true,
+        "registration": {
+          "clientId": "$apiApp",
+          "openIdIssuer": "$authorityHost/$tenantId/v2.0"
+        },
+        "validation": {
+          "allowedAudiences": [ "api://$apiApp" ]
+        }
+      }
+    },
+    "login": { "tokenStore": { "enabled": true } }
+  }
+}
+"@
+$authFile = New-TemporaryFile
+Set-Content -Path $authFile.FullName -Value $authJson -Encoding utf8
+az rest --method put `
+  --url "$armBase/subscriptions/$subId/resourceGroups/$rg/providers/Microsoft.Web/sites/$functionSvcName/config/authsettingsV2?api-version=2022-03-01" `
+  --body "@$($authFile.FullName)"
+Remove-Item $authFile.FullName -Force
 
 # ============================================================ 9. CORS
 foreach ($origin in $portalOrigins) {
@@ -225,7 +281,11 @@ Write-Output ""
 Write-Output "Deployment complete."
 Write-Output "  Function:     https://$functionSvcName.$functionHostSuffix"
 Write-Output "  API appId:    $apiApp"
-Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
+if ($kvSecretStored) {
+  Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
+} else {
+  Write-Output "  Client appId: $clientApp   (secret NOT stored in Key Vault — see the warning above; store it in the connector manually)"
+}
 Write-Output "  Base group:   $baseGroup (AoU-Agent-Users)"
 Write-Output "  IHCC group:   $ihccGroup (AoU-DS-IHCC)"
 Write-Output "  CCDI group:   $ccdiGroup (AoU-DS-CCDI)"

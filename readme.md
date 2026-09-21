@@ -160,9 +160,10 @@ In **Entra admin center → Enterprise applications → `AllOfUs-Function-API` �
 
 5. **Add** all three groups — `AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI` — with the **Default Access** role (not `Agent.Admin`). This creates an app-role assignment linking each group to the service principal, and the *filtered* groups claim from step 3 (**Groups assigned to the application**) emits **only** groups assigned here. Skip it and members' tokens carry no group IDs, so `/search` returns 403 for everyone. *(CLI equivalent: `POST /groups/<group-id>/appRoleAssignments` with `resourceId` = the API service principal's object id and `appRoleId` = the all-zeros Default Access role `00000000-0000-0000-0000-000000000000`.)*
 
-On the **Function app → Settings → Authentication** blade:
+On the **Function app → Settings → Authentication** blade (the deploy script already
+configures this via `config/authsettingsV2` — **verify only**):
 
-6. Edit the Microsoft identity provider and set **Excluded paths** = `/api/health` so the anonymous health check works. Everything else stays behind Easy Auth (`Return401`).
+6. Confirm the Microsoft identity provider shows **Unauthenticated requests → HTTP 401 Unauthorized**, allowed token audience `api://<API-APP-ID>`, and **Excluded paths** containing `/api/health`. No manual edit is normally needed.
 
 > The scope, app role, and groups claim can also be scripted with `az rest` PATCH calls
 > against the app manifest, but the portal path above is the reliable default and only
