@@ -10,6 +10,8 @@ import json
 import logging
 import urllib.request
 
+import httpx
+
 import storage
 
 
@@ -24,6 +26,15 @@ def fetch(url, retries=3, timeout=180):
         except Exception as exc:  # noqa: BLE001
             last = exc
             logging.warning("  fetch attempt %d failed: %s", attempt + 1, exc)
+    logging.info("Retrying %s with an HTTP/2-capable client.", url)
+    try:
+        with httpx.Client(http2=True, headers={"User-Agent": "Mozilla/5.0"},
+                          timeout=timeout) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            return response.json()
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("  HTTP/2 fallback failed: %s", exc)
     raise last
 
 

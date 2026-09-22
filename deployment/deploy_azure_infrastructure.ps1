@@ -25,6 +25,7 @@ $funcSubnetAddrSpace = "192.168.0.0/25"
 $peSubnetStorage = "pe-storage"
 $peSubnetStorageAddrSpace = "192.168.0.128/25"
 $adminRole = "Agent.Admin"
+$azureCliAppId = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 
 # Cloud-specific endpoints derived from $cloud (do not edit unless adding a cloud).
 # Override $loc below if you want a different region within the selected cloud.
@@ -60,6 +61,8 @@ if ($LASTEXITCODE -ne 0) {
     Write-Output "Already logged in as $(az account show --query user.name -o tsv)"
 }
 $tenantId = az account show --query tenantId -o tsv
+# Microsoft Graph endpoint for the selected cloud (graph.microsoft.com / graph.microsoft.us)
+$graphBase = (az cloud show --query "endpoints.microsoftGraphResourceId" -o tsv).TrimEnd("/")
 
 # Resource Group
 az group create --name $rg --location $loc
@@ -68,10 +71,62 @@ az group create --name $rg --location $loc
 # API app registration (the Function's audience) + client app (the connector) + groups.
 $apiApp = az ad app create --display-name "AllOfUs-Function-API" --query appId -o tsv
 az ad app update --id $apiApp --identifier-uris "api://$apiApp"
-# Add the delegated scope `access_as_user` (Expose an API) and the `$adminRole` app
-# role (allowedMemberTypes ["User"]). These use the app manifest - easiest in the
-# portal (App registrations > Expose an API / App roles) or via `az ad app update
-# --set` with a JSON manifest.
+$apiObjId = az ad app show --id $apiApp --query id -o tsv
+
+# Configure the API app manifest in one PATCH: expose the `access_as_user` delegated scope,
+# define the `$adminRole` app role (gates POST /api/refresh), and emit FILTERED group claims
+# (only groups assigned to the app -> lean tokens, avoids the >200-group overage;
+# `ApplicationGroup` also emits in the access token, which Easy Auth reads). This MUST run
+# BEFORE `az ad sp create` below: the enterprise app snapshots the app roles at creation, so
+# creating the SP first would emit the role's GUID (not the value `$adminRole`) -> refresh 403.
+$scopeId     = [guid]::NewGuid().Guid
+$accessRole = "Agent.Access"
+$accessRoleId = [guid]::NewGuid().Guid
+$adminRoleId = [guid]::NewGuid().Guid
+$apiManifest = @"
+{
+  "groupMembershipClaims": "ApplicationGroup",
+  "api": {
+    "requestedAccessTokenVersion": 2,
+    "oauth2PermissionScopes": [
+      {
+        "id": "$scopeId",
+        "type": "User",
+        "value": "access_as_user",
+        "isEnabled": true,
+        "adminConsentDisplayName": "Access the All of Us Research Finder API as the signed-in user",
+        "adminConsentDescription": "Call the API on behalf of the signed-in user, returning only entitled datasets.",
+        "userConsentDisplayName": "Access the All of Us Research Finder on your behalf",
+        "userConsentDescription": "Call the API as you, returning only the datasets you are entitled to see."
+      }
+    ]
+  },
+  "appRoles": [
+    {
+      "id": "$accessRoleId",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "$accessRole",
+      "description": "Users and groups authorized to access the All of Us Research Finder API.",
+      "value": "$accessRole",
+      "isEnabled": true
+    },
+    {
+      "id": "$adminRoleId",
+      "allowedMemberTypes": [ "User" ],
+      "displayName": "$adminRole",
+      "description": "Administrators who can trigger POST /api/refresh.",
+      "value": "$adminRole",
+      "isEnabled": true
+    }
+  ]
+}
+"@
+$apiManifestFile = New-TemporaryFile
+Set-Content -Path $apiManifestFile.FullName -Value $apiManifest -Encoding ascii
+az rest --method PATCH `
+  --uri "$graphBase/v1.0/applications/$apiObjId" `
+  --headers "Content-Type=application/json" --body "@$($apiManifestFile.FullName)" -o none
+Remove-Item $apiManifestFile.FullName -Force
 
 $clientApp = az ad app create --display-name "AllOfUs-Function-Client" --query appId -o tsv
 $clientSecret = az ad app credential reset --id $clientApp --append --query password -o tsv
@@ -81,9 +136,22 @@ $clientSecret = az ad app credential reset --id $clientApp --append --query pass
 $baseGroup = az ad group create --display-name "AoU-Agent-Users" --mail-nickname "AoU-Agent-Users" --query id -o tsv
 $ihccGroup = az ad group create --display-name "AoU-DS-IHCC" --mail-nickname "AoU-DS-IHCC" --query id -o tsv
 $ccdiGroup = az ad group create --display-name "AoU-DS-CCDI" --mail-nickname "AoU-DS-CCDI" --query id -o tsv
-# Emit FILTERED group claims (only groups assigned to the app) to keep tokens lean:
-# portal: API app > Token configuration > Add groups claim > Groups assigned to the
-# application; assign AoU-Agent-Users / AoU-DS-* to the API app's enterprise app.
+
+# Create the API enterprise app (service principal) now that its app roles exist, then assign
+# each entitlement group to the non-admin access role. Assignment both entitles the members
+# and makes them surface in the filtered group claim; without it the base-group check in
+# auth.py rejects every caller with 403. Do not assign $adminRole here.
+az ad sp create --id $apiApp -o none 2>$null
+$apiSp = az ad sp show --id $apiApp --query id -o tsv
+foreach ($gid in @($baseGroup, $ihccGroup, $ccdiGroup)) {
+  $roleBody = @{ principalId = $gid; resourceId = $apiSp; appRoleId = $accessRoleId } | ConvertTo-Json -Compress
+  $roleFile = New-TemporaryFile
+  Set-Content -Path $roleFile.FullName -Value $roleBody -Encoding ascii
+  az rest --method POST `
+    --uri "$graphBase/v1.0/groups/$gid/appRoleAssignments" `
+    --headers "Content-Type=application/json" --body "@$($roleFile.FullName)" -o none
+  Remove-Item $roleFile.FullName -Force
+}
 
 # ============================================================ 2. Networking
 az network vnet create `
@@ -256,7 +324,10 @@ $authJson = @"
           "openIdIssuer": "$authorityHost/$tenantId/v2.0"
         },
         "validation": {
-          "allowedAudiences": [ "api://$apiApp" ]
+          "allowedAudiences": [ "api://$apiApp", "$apiApp" ],
+          "defaultAuthorizationPolicy": {
+            "allowedApplications": [ "$clientApp", "$azureCliAppId" ]
+          }
         }
       }
     },

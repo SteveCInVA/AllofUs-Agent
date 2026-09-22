@@ -36,9 +36,47 @@ def test_fetch_retries_then_raises(monkeypatch):
         raise OSError("net down")
 
     monkeypatch.setattr(feeds.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(feeds.httpx, "Client", lambda **kwargs: _FailingHttpxClient())
     with pytest.raises(OSError):
         feeds.fetch("http://x", retries=3)
     assert calls["n"] == 3
+
+
+class _FailingHttpxClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url):
+        raise OSError("HTTP/2 down")
+
+
+class _HttpxResponse:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return [{"ok": "http2"}]
+
+
+class _HttpxClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url):
+        return _HttpxResponse()
+
+
+def test_fetch_falls_back_to_http2(monkeypatch):
+    monkeypatch.setattr(feeds.urllib.request, "urlopen",
+                        lambda req, timeout=0: (_ for _ in ()).throw(OSError("HTTP/1.1 down")))
+    monkeypatch.setattr(feeds.httpx, "Client", lambda **kwargs: _HttpxClient())
+    assert feeds.fetch("http://x", retries=1) == [{"ok": "http2"}]
 
 
 def _fake_source(fetch):

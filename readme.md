@@ -1,10 +1,12 @@
 # Copilot Agent to assist with finding similar research and datasets across NIH-affiliated sources.
 
-The agent searches four public sources for work similar to a description the user provides:
+The agent searches four source families for work similar to a description the user provides:
 - All of Us Research Project Directory — https://www.researchallofus.org/research-project-directory/
 - All of Us Publication Directory — https://www.researchallofus.org/publication-directory/
 - IHCC Cohort Atlas (health cohorts) — https://ihccglobal.org/ (ingested from the Apache-2.0 `IHCC-cohorts/data-harmonization` GitHub source)
 - CCDI Federation (pediatric cancer datasets, study level) — https://federation.ccdi.cancer.gov/api/v1
+
+> Current deployment model: the app is deployed as a greenfield Azure Function with Entra-based entitlement checks enabled from day one. The deployment provisions the API + client app registrations, the `access_as_user` delegated scope, the `Agent.Access` and `Agent.Admin` app roles, the filtered `groups` claim, the `AoU-Agent-Users` / `AoU-DS-IHCC` / `AoU-DS-CCDI` groups, Easy Auth with `/api/health` excluded, and the `DATASET_CLASSIFICATION` app setting that governs public vs. restricted dataset visibility.
 
 ---
 - Steve Carroll - Microsoft
@@ -13,6 +15,7 @@ The agent searches four public sources for work similar to a description the use
   - Updated:       2026-09-15 - Improved handling of new datasets + added in IHCC and CCDI datasets.
                               - Incorporated Security Model to handle public / restricted data handling
                               - Updated documentation / deployment for configuration in Azure Commericial / GCC
+  - Updated:       2026-09-22 - Finalized entitlement-based greenfield deployment flow, managed-identity storage auth, Easy Auth enforcement, and testing script workflow
 
 
 ## Assumptions:
@@ -54,14 +57,16 @@ one variable.
 > subscription — infrastructure, the Entra identity/entitlement model, code, data, and
 > the Copilot Studio agent. Perform the phases **in order**; several Entra steps must be
 > finished before the app will authenticate, and the app has **no searchable data** until
-> the first refresh is run.
+> the first refresh is run. The live deployment now enables `AUTH_ENFORCED=true`, uses a
+> managed-identity storage configuration, and applies dataset visibility from
+> `DATASET_CLASSIFICATION` rather than hardcoded source assumptions.
 
 ### Deployment overview
 
 1. **Prerequisites** — tooling and Entra permissions (see *Assumptions* above).
 2. **Set deployment variables** in `deploy_azure_infrastructure.ps1`.
 3. **Deploy infrastructure + identity** — run the script.
-4. **Finish the API app registration** — expose scope, create the `Agent.Admin` app role, add the groups claim, authorize the groups/clients, exclude `/api/health` from Easy Auth. *(manual — the script stubs these)*
+4. **Verify identity & authorize the connector** — the script provisions the scope, `Agent.Access` and `Agent.Admin` roles, groups claim, enterprise app, and group-to-access-role assignments; you pre-authorize the connector client (and optionally the Azure CLI) and verify Easy Auth excludes `/api/health`.
 5. **Publish the function code.**
 6. **Assign users & entitlements** — groups + the `Agent.Admin` role.
 7. **Load data** — run the first `/api/refresh` (or wait for the daily 03:00 UTC timer).
@@ -74,7 +79,7 @@ one variable.
 ### Azure Function
 
 #### Deployment Variables
-The following varaiables are defined in the top of the deploy_azure_infrastructure.ps1 file.  They represent the following configurations:
+The following variables are defined at the top of the `deploy_azure_infrastructure.ps1` file. They represent the following configurations:
 
 |Variable|Default Value|Purpose|
 |-----|-----|-----|
@@ -122,87 +127,51 @@ Deployment will perform the following:
 - Update Azure Function to use system assigned managed identity to access storage account
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
 
-#### Configure the Entra identity (required before publish/test)
+#### Configure the Entra identity (verify + authorize the connector)
 
-`deploy_azure_infrastructure.ps1` creates the two app registrations, the three security
-groups, the `Agent.Admin` role **name**, Key Vault, Easy Auth, and all app settings — but
-a few identity items are left to finish by hand (the script marks each one inline). Do
-these **once per environment**, using the `API appId` / `Client appId` printed in the
-deploy summary.
+`deploy_azure_infrastructure.ps1` now provisions the **full API identity model**: both app
+registrations, the `access_as_user` delegated scope, the **`Agent.Admin`** app role, the
+**filtered groups claim** (`groupMembershipClaims = ApplicationGroup`, emitted in the access
+token Easy Auth reads), the three security groups, the API **enterprise application**
+(service principal), and the assignment of each group to the app's no-privilege **Default
+Access** role. Because the script adds the app role *before* it creates the service
+principal, the role emits its value (`Agent.Admin`) rather than a GUID — no recreate-SP
+dance is needed.
 
 > **App registration vs. enterprise application.** Each app is two Entra objects: the
-> **app registration** (the global *definition* — exposed scopes, app roles, the groups
-> claim) and the **enterprise application** / *service principal* (the local instance in
-> your tenant, where **user/group assignments** live). Steps 1–4 below edit the app
-> registration; step 5 uses the enterprise application. Both show the name
-> `AllOfUs-Function-API` and are linked by the app ID.
+> **app registration** (the global *definition* — scopes, app roles, the groups claim) and
+> the **enterprise application** / *service principal* (the tenant-local instance where
+> **user/group assignments** live). The script provisions both; you assign *users* to the
+> groups under *Assign users & entitlements* below.
 
-In **Entra admin center → App registrations → `AllOfUs-Function-API`**:
+Only two identity items remain to finish by hand, **once per environment**, using the
+`API appId` / `Client appId` printed in the deploy summary:
 
-1. **Expose an API** — confirm the Application ID URI is `api://<API-APP-ID>` (set by the script), then **Add a scope**:
-   - **Scope name**: `access_as_user`
-   - **Who can consent**: **Admins and users**
-   - **Admin consent display name**: `Access the All of Us Research Finder API as the signed-in user`
-   - **Admin consent description**: `Allow the app to call the All of Us Research Finder API on behalf of the signed-in user, returning only the datasets that user is entitled to.`
-   - **User consent display name**: `Access the All of Us Research Finder on your behalf`
-   - **User consent description**: `Allow the app to call the All of Us Research Finder API as you, returning only the research datasets you are entitled to see.`
-   - **State**: **Enabled**
-2. **App roles → Create app role** — display name `Agent.Admin`, *Allowed member types* **Users/Groups**, value **`Agent.Admin`**, enabled. *(this app role gates `POST /api/refresh`)*
-3. **Token configuration → Add groups claim** — select **Groups assigned to the application** (filtered — keeps tokens small). The dialog then shows checkboxes for which token *types* carry the claim (**ID**, **Access**, **SAML**) — **tick "Access token"**. This is required because the connector calls the API with an **access token**, and Easy Auth reads the caller's groups from that access token (via `X-MS-CLIENT-PRINCIPAL`); if the claim rode only in the ID token, `auth.py` would see no groups and `/search` would 403. (Ticking ID token as well is harmless.)
-4. **Expose an API → Authorized client applications → Add a client application** — authorize each of these for the `access_as_user` scope:
+1. **Pre-authorize the connector for `access_as_user`.** In **Entra admin center → App
+   registrations → `AllOfUs-Function-API` → Expose an API → Authorized client applications
+   → Add a client application**, authorize:
    - the connector client `<CLIENT-APP-ID>` (`AllOfUs-Function-Client`), and
-   - *(only if you'll call `/api/refresh` from the Azure CLI as shown later)* the **Azure CLI**, appId `04b07795-8ddb-461a-bbee-02f9e1bf7b46`.
+   - *(only if you'll call `/api/refresh` from the Azure CLI as shown later)* the **Azure
+     CLI**, appId `04b07795-8ddb-461a-bbee-02f9e1bf7b46`.
+2. **Verify Easy Auth** on the **Function app → Settings → Authentication** blade (the
+   script configures it via `config/authsettingsV2`): Microsoft identity provider with
+   **Unauthenticated requests → HTTP 401 Unauthorized**, allowed token audience
+    `api://<API-APP-ID>`, an allowlist for the connector client and Azure CLI, and
+        **Excluded paths** containing `/api/health`. The API registration must issue v2
+        access tokens so their issuer matches this configuration. No edit is normally needed.
 
-**Now create the service principal** (the enterprise application). The deploy script uses
-`az ad app create`, which creates only the app-registration object — *not* the service
-principal — so `AllOfUs-Function-API` does not yet appear under *Enterprise applications*.
-Create it **after** the scope and app role above exist, so its copy of the app roles
-includes `Agent.Admin`:
+**Verify the group assignments** (optional):
 
 ```powershell
-az ad sp create --id "<API-APP-ID>"     # materializes the enterprise application
+$apiSp = az ad sp show --id "<API-APP-ID>" --query id -o tsv
+az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" `
+  --query "value[].{who:principalDisplayName, appRoleId:appRoleId}" -o table
 ```
 
-> ⚠️ **Order matters.** If the service principal is created *before* the `Agent.Admin` app
-> role is defined, its copy of the roles is stale and the access token emits the role's
-> **GUID** instead of the value `Agent.Admin` — so `/api/refresh` returns 403 even though
-> the role is "assigned". If that happens, recreate it:
-> `az ad sp delete --id (az ad sp show --id <API-APP-ID> --query id -o tsv)` then
-> `az ad sp create --id <API-APP-ID>`, and redo the step-5 group assignments and the
-> Agent.Admin role assignment (see *Assign users & entitlements*).
-
-Back in the **enterprise application** `AllOfUs-Function-API` (its *Users and groups* is
-where assignments live, but do the assignment via CLI as shown — the portal can't pick
-the right role here):
-
-**Assign the three groups to the application** (`AoU-Agent-Users`, `AoU-DS-IHCC`,
-`AoU-DS-CCDI`) so the filtered groups claim emits them:
-
-5. The groups claim emits any group **assigned to the application**, regardless of which role the assignment uses — but it must **not** be `Agent.Admin` (that would make every member an admin). Use the no-privilege **Default Access** role (app role id `00000000-0000-0000-0000-000000000000`).
-
-   ⚠️ Because the app now exposes the `Agent.Admin` app role, the portal's *Enterprise applications → Users and groups → Add → Select a role* pane offers **only `Agent.Admin`** — "Default Access" is hidden once a user-assignable role exists. So assign the groups with the CLI instead of the portal:
-
-   ```powershell
-   $apiSp = az ad sp show --id "<API-APP-ID>" --query id -o tsv
-   foreach ($g in "AoU-Agent-Users","AoU-DS-IHCC","AoU-DS-CCDI") {
-     $gid  = az ad group show --group $g --query id -o tsv
-     $body = @{ principalId=$gid; resourceId=$apiSp; appRoleId="00000000-0000-0000-0000-000000000000" } | ConvertTo-Json -Compress
-     $f = New-TemporaryFile; Set-Content $f.FullName $body -Encoding ascii
-     az rest --method POST --uri "https://graph.microsoft.com/v1.0/groups/$gid/appRoleAssignments" --headers "Content-Type=application/json" --body "@$($f.FullName)"
-     Remove-Item $f.FullName
-   }
-   ```
-
-   Verify with `az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$apiSp/appRoleAssignedTo" --query "value[].{who:principalDisplayName, appRoleId:appRoleId}" -o table`. Skip this and members' tokens carry no group IDs, so `/search` returns 403 for everyone. (GCC: use `graph.microsoft.us`.)
-
-On the **Function app → Settings → Authentication** blade (the deploy script already
-configures this via `config/authsettingsV2` — **verify only**):
-
-6. Confirm the Microsoft identity provider shows **Unauthenticated requests → HTTP 401 Unauthorized**, allowed token audience `api://<API-APP-ID>`, and **Excluded paths** containing `/api/health`. No manual edit is normally needed.
-
-> The scope, app role, and groups claim can also be scripted with `az rest` PATCH calls
-> against the app manifest, but the portal path above is the reliable default and only
-> runs once per environment.
+Expect the three `AoU-*` groups on the non-admin `Agent.Access` role.
+If `/refresh` ever shows a **GUID** instead of `Agent.Admin` in the token's `roles`, the service
+principal predates the app role — recreate it (`az ad sp delete` then `az ad sp create`) and
+re-run the group + role assignments. (GCC: use `graph.microsoft.us`.)
 
 #### Function Code Deployment
 
@@ -233,7 +202,7 @@ effect on a **new** token, so sign out/in — or request a fresh token — after
 ```powershell
 $apiApp = "<API-APP-ID>"                                # from the deploy summary
 $me     = az ad signed-in-user show --query id -o tsv   # or: az ad user show --id <upn> --query id -o tsv
-$apiSp  = az ad sp show --id $apiApp --query id -o tsv   # API service principal (created in phase 4) object id
+$apiSp  = az ad sp show --id $apiApp --query id -o tsv   # API service principal (created by the deploy script) object id
 
 # Groups -> `groups` claim
 az ad group member add --group "AoU-Agent-Users" --member-id $me   # base: required for /search
@@ -307,12 +276,12 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 
 | Symptom | Cause / fix |
 |---|---|
-| `az account get-access-token` → `AADSTS65001` (consent required) | Azure CLI not authorized on the API scope — do step 4.4, or run `az login --scope api://<API-APP-ID>/access_as_user` once. |
-| `/search` → `403` base group required | Groups claim not emitting (steps 4.3–4.5) or the token predates the group assignment. Get a fresh token. |
-| `/refresh` → `403` Admin role required | `Agent.Admin` not assigned (step 6) or a stale token. |
-| `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows a **GUID** (not `Agent.Admin`) | The enterprise app (service principal) was created **before** the app role was defined, so its role copy is stale and emits the ID. Recreate the SP (`az ad sp delete` then `az ad sp create`), redo the group + role assignments, and get a fresh token. |
+| `az account get-access-token` → `AADSTS65001` (consent required) | Azure CLI not pre-authorized on the API scope — do *Configure the Entra identity* step 1, or run `az login --scope api://<API-APP-ID>/access_as_user` once. |
+| `/search` → `403` base group required | The token predates the group assignment (the script assigns the groups at deploy time). Get a fresh token; if it persists, verify the assignments (*Configure the Entra identity*). |
+| `/refresh` → `403` Admin role required | `Agent.Admin` not granted to the user (*Assign users & entitlements*) or a stale token. |
+| `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows a **GUID** (not `Agent.Admin`) | The enterprise app (service principal) was recreated **before** the app role existed, so its role copy is stale and emits the ID. Recreate the SP (`az ad sp delete` then `az ad sp create`), redo the group + role assignments, and get a fresh token. |
 | `/refresh` → `500` on IHCC/CCDI | Outbound egress to the three public data domains is blocked (see the GCC egress caveat above). |
-| `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (step 4.6). |
+| `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (*Configure the Entra identity* step 2). |
 
 ## Authentication & Authorization
 
@@ -338,15 +307,15 @@ Easy Auth for **local development** — `local.settings.json` sets it `false` �
 deployed environments always enforce.)
 
 **Setup** — `deploy_azure_infrastructure.ps1` provisions the API + client app
-registrations, the groups (`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`), the
-`Agent.Admin` role name, Easy Auth, a Key Vault for the connector secret, and the auth
-app settings. A few app-registration manifest items and **all** user/entitlement
-assignments are finished after the run — the full, ordered procedure is in
-**Deployment steps** above:
+registrations, the `access_as_user` scope, the `Agent.Admin` app role, the groups
+(`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`) and their assignment to the API app, the
+filtered groups claim, the API enterprise application, Easy Auth, a Key Vault for the
+connector secret, and the auth app settings. Only connector pre-authorization and **all**
+user/entitlement assignments are finished after the run — the full, ordered procedure is
+in **Deployment steps** above:
 
-1. *Configure the Entra identity* — expose the `access_as_user` scope, create the
-   `Agent.Admin` app role, add the groups claim, authorize the groups/clients, and
-   exclude `/api/health` from Easy Auth.
+1. *Configure the Entra identity* — pre-authorize the connector client (and optionally the
+   Azure CLI) for `access_as_user`, and verify Easy Auth excludes `/api/health`.
 2. *Assign users & entitlements* — add users to `AoU-Agent-Users` (base) and to
    `AoU-DS-IHCC` / `AoU-DS-CCDI` as needed; grant admins the `Agent.Admin` app role.
 3. *Load data (first refresh)* — POST `/api/refresh` with an admin bearer token, or wait
