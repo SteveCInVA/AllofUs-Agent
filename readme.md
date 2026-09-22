@@ -133,8 +133,8 @@ Deployment will perform the following:
 registrations, the `access_as_user` delegated scope, the **`Agent.Admin`** app role, the
 **filtered groups claim** (`groupMembershipClaims = ApplicationGroup`, emitted in the access
 token Easy Auth reads), the three security groups, the API **enterprise application**
-(service principal), and the assignment of each group to the app's no-privilege **Default
-Access** role. Because the script adds the app role *before* it creates the service
+(service principal), and the assignment of each group to the app's non-admin **`Agent.Access`**
+app role. Because the script adds the app roles *before* it creates the service
 principal, the role emits its value (`Agent.Admin`) rather than a GUID — no recreate-SP
 dance is needed.
 
