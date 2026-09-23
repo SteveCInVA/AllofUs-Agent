@@ -13,8 +13,8 @@
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo21"
-$sfx = "aou0921"
+$rg  = "rg-allofus-demo23"
+$sfx = "aou0923"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"
@@ -56,7 +56,7 @@ az cloud set --name $cloud
 az account show -o none 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Output "Not logged in; launching az login..."
-    az login
+    az login --scope https://graph.microsoft.us/.default
 } else {
     Write-Output "Already logged in as $(az account show --query user.name -o tsv)"
 }
@@ -65,7 +65,9 @@ $tenantId = az account show --query tenantId -o tsv
 $graphBase = (az cloud show --query "endpoints.microsoftGraphResourceId" -o tsv).TrimEnd("/")
 
 # Resource Group
+write-output "Creating resource group '$rg' in location '$loc'..."
 az group create --name $rg --location $loc
+write-output "Resource group '$rg' created (or already exists)."
 
 # ============================================================ 1. Entra identity
 # API app registration (the Function's audience) + client app (the connector) + groups.
@@ -154,6 +156,8 @@ foreach ($gid in @($baseGroup, $ihccGroup, $ccdiGroup)) {
 }
 
 # ============================================================ 2. Networking
+write-output "Starting networking setup..."
+write-output "Creating virtual network '$vnetName' with address space '$vnetAddressSpace'..."
 az network vnet create `
   --resource-group $rg `
   --name $vnetName `
@@ -161,6 +165,7 @@ az network vnet create `
   --subnet-name $funcSubnetName `
   --subnet-prefix $funcSubnetAddrSpace
 
+write-output "Creating subnet '$peSubnetStorage' with address space '$peSubnetStorageAddrSpace'..."
 az network vnet subnet create `
   --resource-group $rg `
   --vnet-name $vnetName `
@@ -168,16 +173,20 @@ az network vnet subnet create `
   --address-prefixes $peSubnetStorageAddrSpace
 
 # ============================================================ 3. Storage + Function
+write-output "Starting storage and function app setup..."
+write-output "Creating storage account '$storageAcctName'..."
 az storage account create `
   --name $storageAcctName `
   --resource-group $rg `
   --location $loc `
   --min-tls-version TLS1_2 `
   --sku Standard_LRS
+write-output "Storage account '$storageAcctName' created."
 
 # NOTE: Flex Consumption is not available in every Azure Government region. If
 # --flexconsumption-location fails for the selected $loc, either pick a Gov region
 # that offers Flex Consumption or switch to an Elastic Premium / Consumption plan.
+write-output "Creating function app '$functionSvcName'..."
 az functionapp create `
   --name $functionSvcName `
   --resource-group $rg `
@@ -196,6 +205,7 @@ $sami = az functionapp identity show --resource-group $rg --name $functionSvcNam
 $storageId = az storage account show --resource-group $rg --name $storageAcctName --query id --output tsv
 
 # ============================================================ 4. Role assignments (storage)
+write-output "Assigning roles to the function app's managed identity for storage access..."
 az role assignment create --assignee-object-id $sami --assignee-principal-type ServicePrincipal `
   --role "Storage Blob Data Contributor" --scope $storageId
 az role assignment create --assignee-object-id $sami --assignee-principal-type ServicePrincipal `
@@ -204,6 +214,7 @@ az role assignment create --assignee-object-id $sami --assignee-principal-type S
   --role "Storage Table Data Contributor" --scope $storageId
 
 # ============================================================ 5. Private endpoints
+write-output "Setting up private endpoints and DNS zones..."
 $zones = @(
     "privatelink.blob.$privateLinkSuffix",
     "privatelink.queue.$privateLinkSuffix",
@@ -237,6 +248,7 @@ foreach ($service in @("queue", "table")) {
         --name "storage-dns" --private-dns-zone "privatelink.$service.$privateLinkSuffix" --zone-name $service
 }
 
+write-output "Setting up Key Vault '$kvName' and storing connector secret..."
 # ============================================================ 6. Key Vault (connector secret)
 # NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets - being
 # subscription Owner is control-plane only. Grant the deployer "Key Vault Secrets Officer"
@@ -295,8 +307,19 @@ az functionapp config appsettings set --resource-group $rg --name $functionSvcNa
       "STORAGE_ENDPOINT_SUFFIX=$endpointSuffix" `
       "AUTH_ENFORCED=true" `
       "ADMIN_ROLE=$adminRole" `
-      "BASE_ENTITLEMENT_GROUP_ID=$baseGroup" `
-      "DATASET_CLASSIFICATION=$datasetClassification"
+      "BASE_ENTITLEMENT_GROUP_ID=$baseGroup"
+
+# Set via a settings file, not an inline arg: az.cmd's cmd.exe re-parse strips the
+# embedded quotes from inline JSON, corrupting DATASET_CLASSIFICATION and silently
+# defaulting every dataset to public.
+$dcSettings = @(
+  @{ name = "DATASET_CLASSIFICATION"; value = $datasetClassification; slotSetting = $false }
+) | ConvertTo-Json -Compress
+$dcFile = New-TemporaryFile
+Set-Content -Path $dcFile.FullName -Value $dcSettings -Encoding ascii
+az functionapp config appsettings set --resource-group $rg --name $functionSvcName `
+  --settings "@$($dcFile.FullName)"
+Remove-Item $dcFile.FullName -Force
 
 # ============================================================ 8. Easy Auth (Entra, authV2)
 # Require a valid Entra token on every route except /api/health, returning 401 (not a login
@@ -357,6 +380,7 @@ if ($kvSecretStored) {
   Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
 } else {
   Write-Output "  Client appId: $clientApp   (secret NOT stored in Key Vault - see the warning above; store it in the connector manually)"
+  Write-Output "  Connector-client-secret = $clientSecret"
 }
 Write-Output "  Base group:   $baseGroup (AoU-Agent-Users)"
 Write-Output "  IHCC group:   $ihccGroup (AoU-DS-IHCC)"

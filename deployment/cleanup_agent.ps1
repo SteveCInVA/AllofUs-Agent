@@ -42,8 +42,8 @@ $ErrorActionPreference = "Continue"
 # Config - MUST match the deployment you are tearing down
 # (mirror deploy_azure_infrastructure.ps1)
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg    = "rg-allofus-demo21"
-$sfx   = "aou0921"
+$rg    = "rg-allofus-demo23"
+$sfx   = "aou0923"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName          = "kv-allofus-$sfx"

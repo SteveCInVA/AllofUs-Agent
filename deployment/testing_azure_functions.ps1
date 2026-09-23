@@ -5,8 +5,7 @@
 ##################################
 
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo21"
-$sfx = "aou0921"
+$sfx = "aou0923"
 $app = "func-allofus-$sfx"
 $apiAppId = "<API-APP-ID>"     # AllOfUs-Function-API appId from the deployment output
 
@@ -68,6 +67,22 @@ $query = [System.Uri]::EscapeDataString(
 $response = Invoke-RestMethod `
     -Method Get `
     -Uri "$search_uri`?query=$query&directory=all&top=5" `
+    -Headers $headers
+
+$response | ConvertTo-Json -Depth 10
+clear-variable -Name response
+
+##########################################
+
+$search_uri = "$uri/search"
+
+$query = [System.Uri]::EscapeDataString(
+    "childhood asthma air pollution"
+)
+
+$response = Invoke-RestMethod `
+    -Method Get `
+    -Uri "$search_uri`?query=$query&directory=ccdi&top=5" `
     -Headers $headers
 
 $response | ConvertTo-Json -Depth 10
