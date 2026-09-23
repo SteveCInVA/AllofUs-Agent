@@ -135,9 +135,25 @@ $clientSecret = az ad app credential reset --id $clientApp --append --query pass
 # Pre-authorize the client to the API's access_as_user scope (portal: API
 # permissions > Add a permission > My APIs > AllOfUs-Function-API > Grant consent).
 
-$baseGroup = az ad group create --display-name "AoU-Agent-Users" --mail-nickname "AoU-Agent-Users" --query id -o tsv
-$ihccGroup = az ad group create --display-name "AoU-DS-IHCC" --mail-nickname "AoU-DS-IHCC" --query id -o tsv
-$ccdiGroup = az ad group create --display-name "AoU-DS-CCDI" --mail-nickname "AoU-DS-CCDI" --query id -o tsv
+function Get-OrCreateGroup([string]$displayName) {
+  # az ad group create errors (empty output -> $null) when the group already exists
+  # from a prior run, so re-running this script must look it up instead of recreating it.
+  $existing = az ad group show --group $displayName --query id -o tsv 2>$null
+  if ($LASTEXITCODE -eq 0 -and $existing) {
+    return $existing
+  }
+  return az ad group create --display-name $displayName --mail-nickname $displayName --query id -o tsv
+}
+
+$baseGroup = Get-OrCreateGroup "AoU-Agent-Users"
+$ihccGroup = Get-OrCreateGroup "AoU-DS-IHCC"
+$ccdiGroup = Get-OrCreateGroup "AoU-DS-CCDI"
+
+foreach ($g in @(@{n="AoU-Agent-Users"; v=$baseGroup}, @{n="AoU-DS-IHCC"; v=$ihccGroup}, @{n="AoU-DS-CCDI"; v=$ccdiGroup})) {
+  if ([string]::IsNullOrWhiteSpace($g.v)) {
+    throw "Failed to resolve group object id for '$($g.n)'; aborting before app settings are written with a null entitlement_group_id."
+  }
+}
 
 # Create the API enterprise app (service principal) now that its app roles exist, then assign
 # each entitlement group to the non-admin access role. Assignment both entitles the members
