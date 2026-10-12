@@ -1,5 +1,6 @@
 azure-functions
 azure-storage-blob
 azure-identity
+httpx[http2]
 rank_bm25
 numpy

@@ -1,0 +1,37 @@
+[
+  {
+    "cohort_name": "Canadian Partnership",
+    "description": "Non-profit member only",
+    "website": "https://canpath.ca/",
+    "pi_lead": "Philip Awadalla",
+    "countries": ["Canada"],
+    "current_enrollment": 345000,
+    "questionnaire_survey_data": {
+      "diseases": ["Cancer", "Cardiovascular diseases"],
+      "lifestyle_and_behaviours": ["Alcohol use history"]
+    },
+    "available_data_types": {
+      "biospecimens": "51-75%",
+      "genomic_data_wgs": "1-25%",
+      "imaging_data": "No"
+    },
+    "type_of_cohort": {"longitudinal": "Yes", "case_control": "No"},
+    "cohort_ancestry": {"european_or_white": "51-75%", "other": "No"}
+  },
+  {
+    "cohort_name": "Canadian Partnership",
+    "description": "dup name, no website, string country",
+    "website": "",
+    "pi_lead": "Second Lead",
+    "countries": "Canada",
+    "current_enrollment": 0,
+    "questionnaire_survey_data": {"diseases": ["Asthma"]},
+    "available_data_types": {},
+    "type_of_cohort": {},
+    "cohort_ancestry": {}
+  },
+  {
+    "cohort_name": "",
+    "website": "https://skip.example/"
+  }
+]

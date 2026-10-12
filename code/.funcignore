@@ -7,3 +7,8 @@ local.settings.json
 data/
 *.md
 build_index.py
+# No packaged index fallback (Option A): indexes are populated in Blob Storage by
+# the first /api/refresh (or the daily timer). Excluding index/ also guarantees no
+# restricted dataset content is ever shipped in the deployment package.
+index/
+corpus.pkl

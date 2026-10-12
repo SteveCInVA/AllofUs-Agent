@@ -1,0 +1,38 @@
+flowchart TB
+    FA["function_app.py<br/>routes /search /refresh /health + timer"]
+
+    subgraph ORCH["Orchestration"]
+      direction LR
+      RJ["refresh_job.py"]
+      BI["build_index.py"]
+    end
+
+    REG["sources.py<br/>registry"]
+
+    subgraph SRCMODS["Source modules"]
+      direction LR
+      SA["source_allofus"]
+      SI["source_ihcc"]
+      SD["source_ccdi"]
+    end
+
+    subgraph SHARED["Shared libraries"]
+      direction LR
+      SC["search_core.py"]
+      FEED["feeds.py"]
+      ST["storage.py"]
+      SB["source_base.py"]
+    end
+
+    FA --> ORCH
+    FA --> REG
+    RJ --> REG
+    REG --> SRCMODS
+
+    SRCMODS --> SB
+    SRCMODS --> FEED
+    SRCMODS --> SC
+
+    ORCH --> SHARED
+    FA --> SHARED
+    FEED --> ST

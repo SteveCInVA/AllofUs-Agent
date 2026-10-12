@@ -1,89 +1,79 @@
 """
-Shared refresh job: fetch the live feeds, rebuild the corpus snapshot, and
-upload it to Blob Storage. Called by both the timer trigger and the on-demand
-HTTP endpoint in function_app.py.
+Refresh job: ingest every registered source, build a per-dataset search index, and
+upload each to Blob Storage along with a manifest. Called by the timer trigger and
+the on-demand HTTP endpoint in function_app.py.
+
+Per-dataset design: each dataset gets its own index blob (`index/<key>.pkl`) so the
+Function can load only the indexes a caller is entitled to. A single source being
+unavailable degrades gracefully — its previous index blob is left in place (carried).
+A manifest (`index/manifest.json`) lists every dataset with its name and record
+count for the /health endpoint.
+
+Resilience order per source: live fetch+normalize (cached to its per-source docs
+blob) -> per-source docs cache -> keep the previous per-dataset index blob.
 """
+import datetime
+import json
 import logging
-import os
 import time
 
 import feeds
 import search_core
 import storage
+from sources import get_enabled_sources
 
 
-def _previous_artifact():
-    """Bytes of the current corpus snapshot: blob first, else the packaged file."""
-    data, _ = storage.download_corpus()
-    if data:
-        return data
-    path = os.path.join(os.path.dirname(__file__), "corpus.pkl")
-    if os.path.exists(path):
-        with open(path, "rb") as fh:
-            return fh.read()
-    return None
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 def rebuild_and_upload():
-    """Fetch feeds → build snapshot → upload to blob. Returns a summary dict.
-
-    A single failing feed no longer sinks the whole refresh, nor does it shrink
-    the corpus: each feed falls back to its cached raw snapshot, and if even
-    that is missing its already-normalized records are carried over from the
-    previous corpus snapshot. Only when no data is available anywhere does this
-    raise.
-    """
+    """Ingest all sources -> per-dataset indexes + manifest. Returns a summary."""
     started = time.time()
-    logging.info("Refresh: fetching feeds…")
-    pubs, pub_status = feeds.load_feed_resilient(feeds.PUBLICATIONS, "publications.json")
-    projs, proj_status = feeds.load_feed_resilient(feeds.PROJECTS, "projects.json")
+    sources = get_enabled_sources()
+    logging.info("Refresh: ingesting %d sources into per-dataset indexes…", len(sources))
 
-    # Carry any fully-unavailable feed's records over from the previous snapshot
-    # so one failing feed can't drop records (and the health count) from the corpus.
-    carried_docs, carried_tokens = [], []
-    if pubs is None or projs is None:
-        prev = _previous_artifact()
-        if prev:
-            if pubs is None:
-                d, t = search_core.carry_source(prev, "publication")
-                carried_docs += d
-                carried_tokens += t
-                pub_status = "carried" if d else pub_status
-            if projs is None:
-                d, t = search_core.carry_source(prev, "project")
-                carried_docs += d
-                carried_tokens += t
-                proj_status = "carried" if d else proj_status
+    manifest = {"total": 0, "datasets": []}
+    statuses = {}
 
-    if not (pubs or projs or carried_docs):
-        raise RuntimeError(
-            "No data available: live fetch failed, no cached feed, and no "
-            f"previous snapshot (publications={pub_status}, projects={proj_status}).")
+    for src in sources:
+        docs, status = feeds.load_source_resilient(src)
+        count = 0
+        if docs is None:
+            # Keep the previous index blob for this dataset (carry it forward).
+            prev, _ = storage.download_index(src.key)
+            if prev:
+                try:
+                    slim, _tokens = search_core.load_artifact(prev)
+                    count = len(slim)
+                    status = "carried"
+                except Exception:  # noqa: BLE001
+                    logging.exception("Could not read previous index for %s", src.key)
+                    status = "failed"
+            else:
+                status = "failed"
+        else:
+            data, count = search_core.build_artifact_bytes(docs)
+            storage.upload_index(src.key, data)
 
-    pubs = pubs or []
-    projs = projs or []
-    logging.info("Refresh: building snapshot (%d live pubs, %d live projects, %d carried)…",
-                 len(pubs), len(projs), len(carried_docs))
-    data, n = search_core.build_artifact_bytes(pubs, projs, carried_docs, carried_tokens)
+        statuses[src.key] = status
+        manifest["total"] += count
+        manifest["datasets"].append({
+            "key": src.key,
+            "name": src.label,
+            "classification": getattr(src, "classification", "public"),
+            "count": count,
+            "status": status,
+            "updated_at": _now_iso(),
+        })
 
-    logging.info("Refresh: uploading %d bytes to blob…", len(data))
-    etag = storage.upload_corpus(data)
+    storage.upload_manifest(json.dumps(manifest).encode("utf-8"))
 
-    pub_count = len(pubs) + sum(1 for d in carried_docs if d.get("source") == "publication")
-    proj_count = len(projs) + sum(1 for d in carried_docs if d.get("source") == "project")
-    warnings = [f"{name} feed used {status} data"
-                for name, status in (("publications", pub_status),
-                                     ("projects", proj_status))
-                if status != "live"]
-
+    warnings = [f"{k} used {v} data" for k, v in statuses.items() if v != "live"]
     summary = {
-        "records": n,
-        "publications": pub_count,
-        "projects": proj_count,
-        "publications_source": pub_status,
-        "projects_source": proj_status,
-        "bytes": len(data),
-        "etag": etag,
+        "records": manifest["total"],
+        "datasets": {d["key"]: d["count"] for d in manifest["datasets"]},
+        "sources": statuses,
         "seconds": round(time.time() - started, 1),
     }
     if warnings:
