@@ -227,6 +227,16 @@ Remove-Item $bodyFile.FullName -Force
 > **GCC:** use `https://graph.microsoft.us` for the `az rest` URI. To entitle many users,
 > add them to the groups (and assign the role to a group instead of each user).
 
+#### Get a new token 
+
+The deploying user needs to have their token refreshed to ensure they are able to populate the cache and query datasets
+
+````powershell
+az logout
+az account clear
+az login
+````
+
 #### Load data (first refresh)
 
 Deployed packages ship no index data, so populate Blob Storage by running one refresh (or

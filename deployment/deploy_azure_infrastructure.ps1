@@ -328,9 +328,11 @@ az functionapp config appsettings set --resource-group $rg --name $functionSvcNa
 # Set via a settings file, not an inline arg: az.cmd's cmd.exe re-parse strips the
 # embedded quotes from inline JSON, corrupting DATASET_CLASSIFICATION and silently
 # defaulting every dataset to public.
-$dcSettings = @(
-  @{ name = "DATASET_CLASSIFICATION"; value = $datasetClassification; slotSetting = $false }
-) | ConvertTo-Json -Compress
+# NOTE: ConvertTo-Json collapses a single-element array to a bare object (PS 5.1 and 7
+# both do this), so az then reads top-level keys (name/value/slotSetting) as if they were
+# individual app settings instead of one DATASET_CLASSIFICATION setting. Wrap by hand.
+$dcSettingsObj = @{ name = "DATASET_CLASSIFICATION"; value = $datasetClassification; slotSetting = $false } | ConvertTo-Json -Compress
+$dcSettings = "[$dcSettingsObj]"
 $dcFile = New-TemporaryFile
 Set-Content -Path $dcFile.FullName -Value $dcSettings -Encoding ascii
 az functionapp config appsettings set --resource-group $rg --name $functionSvcName `

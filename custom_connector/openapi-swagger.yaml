@@ -23,8 +23,11 @@ produces:
   - application/json
 # Delegated Entra sign-in. In Power Platform, set the connector's OAuth 2.0 (Azure
 # Active Directory) identity provider with the client app registration's Client ID +
-# Secret and Resource/Scope = api://<API-APP-ID>/access_as_user. For Azure
-# Government / GCC use login.microsoftonline.us authorities.
+# Secret and Resource/Scope = api://<API-APP-ID>/access_as_user. This scope
+# authenticates the signed-in user; API authorization additionally requires the
+# AoU-Agent-Users group for search and the Agent.Admin app role for refresh. The
+# Agent.Admin app role is a token role, not an OAuth scope. For Azure Government / GCC
+# use login.microsoftonline.us authorities.
 securityDefinitions:
   entra-oauth2:
     type: oauth2
@@ -32,7 +35,7 @@ securityDefinitions:
     authorizationUrl: https://login.microsoftonline.com/<TENANT-ID>/oauth2/v2.0/authorize
     tokenUrl: https://login.microsoftonline.com/<TENANT-ID>/oauth2/v2.0/token
     scopes:
-      api://<API-APP-ID>/access_as_user: Search the directories as the signed-in user
+      api://<API-APP-ID>/access_as_user: Call the API as the signed-in user
 security:
   - entra-oauth2:
       - api://<API-APP-ID>/access_as_user
@@ -45,7 +48,11 @@ paths:
         All of Us publications (~1,400) and research projects (~25,900), IHCC
         health cohorts (~90), and CCDI pediatric-cancer datasets (~300). Returns
         the most likely matches, each with a title and a clickable source url the
-        agent must present to the user.
+        agent must present to the user. Requires membership in the AoU-Agent-Users
+        Entra group. Results are limited to public datasets and restricted datasets
+        for which the signed-in user has the corresponding AoU-DS-<name> group
+        (currently AoU-DS-IHCC and AoU-DS-CCDI). Missing authentication returns
+        401; missing base-group entitlement returns 403.
       operationId: searchDirectories
       parameters:
         - name: query
@@ -155,6 +162,50 @@ paths:
                       description: Relevance score (higher = more similar).
         '400':
           description: Missing required query parameter
+        '401':
+          description: Authentication required
+        '403':
+          description: Caller is not a member of the AoU-Agent-Users group
         '500':
           description: Search error
+  /health:
+    get:
+      summary: Get service and dataset health
+      description: >-
+        Returns service status and the name and record count for every dataset,
+        including restricted datasets. This endpoint is intentionally anonymous;
+        it does not return dataset contents.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service status and dataset manifest
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: ok
+              total:
+                type: integer
+                format: int32
+              datasets:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    key:
+                      type: string
+                    name:
+                      type: string
+                    classification:
+                      type: string
+                      enum: [public, restricted]
+                    count:
+                      type: integer
+                      format: int32
+                    status:
+                      type: string
+                    updated_at:
+                      type: string
+                      format: date-time
 definitions: {}
