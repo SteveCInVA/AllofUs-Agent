@@ -1,0 +1,10 @@
+flowchart TB
+    U["Signed-in user"] --> CC["Copilot Studio custom connector"]
+    CC --> EA["Easy Auth<br/>issuer, audience, allowed client"]
+    EA -- "reject" --> DENY["Platform 401 or 403"]
+    EA -- "validated principal" --> BASE{"Base group present?"}
+    BASE -- "no" --> R403["Function 403"]
+    BASE -- "yes" --> KEYS["Public plus group-entitled<br/>restricted dataset keys"]
+    KEYS --> LOAD["Load or reuse entitled indexes"]
+    LOAD --> BM["Merged BM25 scoring"]
+    BM --> OUT["Filtered matches and returned count"]

@@ -1,19 +1,10 @@
 flowchart TB
-    Q["GET /api/search"] --> ENG{"in-memory<br/>corpus loaded?"}
-
-    ENG -- "no, first call" --> L1{"index in<br/>Blob?"}
-    L1 -- "yes" --> LB["load index/&lt;key&gt;.pkl"]
-    L1 -- "no" --> LP["no data yet<br/>(await /api/refresh)"]
-
-    ENG -- "yes" --> STALE{"ETag changed?"}
-    STALE -- "yes" --> RB["reload from Blob"]
-    STALE -- "no" --> USE["use in-memory engine"]
-
-    LB --> USE
-    LP --> USE
-    RB --> USE
-
-    USE --> SRCH["BM25 score + rank"]
-    SRCH --> FLT["filter by source"]
-    FLT --> TOP["top N + score,<br/>drop empty fields"]
-    TOP --> J["JSON results<br/>title + snippet + url"]
+    Q["GET or POST /api/search"] --> AUTH{"Authenticated<br/>and in base group?"}
+    AUTH -- "no" --> DENY["401 or 403"]
+    AUTH -- "yes" --> KEYS["Select public plus<br/>group-entitled restricted keys"]
+    KEYS --> CHECK["Throttled ETag check<br/>for requested cached indexes"]
+    CHECK --> LOAD["Load uncached or changed indexes<br/>Blob first, local-dev fallback"]
+    LOAD --> MERGE["Reuse or build merged BM25<br/>for sorted entitlement signature"]
+    MERGE --> SCORE["Score all entitled records"]
+    SCORE --> FILTER["Filter source, take top positive scores<br/>drop empty fields, add score"]
+    FILTER --> OUT["JSON results and returned count<br/>empty if no index or positive match"]
