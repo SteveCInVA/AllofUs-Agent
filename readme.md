@@ -8,6 +8,13 @@ The agent searches four source families for work similar to a description the us
 
 > Current deployment model: the app is deployed as a greenfield Azure Function with Entra-based entitlement checks enabled from day one. The deployment provisions the API + client app registrations, the `access_as_user` delegated scope, the `Agent.Access` and `Agent.Admin` app roles, the filtered `groups` claim, the `AoU-Agent-Users` / `AoU-DS-IHCC` / `AoU-DS-CCDI` groups, Easy Auth with `/api/health` excluded, and the `DATASET_CLASSIFICATION` app setting that governs public vs. restricted dataset visibility.
 
+> **As-built review (2026-11-07):** the [`docs/`](docs/architecture.md) references
+> describe the current implementation and its remaining gaps. In particular,
+> classification defaults are not fail-closed, HTTP refresh can exceed Azure's
+> response timeout, and health `status: ok` does not certify readiness. Review the
+> [deployment caveats](docs/multi-cloud-deployment.md#known-deployment-limitations)
+> before treating this runbook or script completion as deployment verification.
+
 ---
 - Steve Carroll - Microsoft
 - Intial version:  2026-07-10
@@ -135,8 +142,9 @@ registrations, the `access_as_user` delegated scope, the **`Agent.Admin`** app r
 token Easy Auth reads), the three security groups, the API **enterprise application**
 (service principal), and the assignment of each group to the app's non-admin **`Agent.Access`**
 app role. Because the script adds the app roles *before* it creates the service
-principal, the role emits its value (`Agent.Admin`) rather than a GUID — no recreate-SP
-dance is needed.
+principal, the initial enterprise application is created with those roles already
+defined. Token `roles` should contain assigned app-role values such as `Agent.Admin`;
+group object IDs belong in the separate `groups` claim.
 
 > **App registration vs. enterprise application.** Each app is two Entra objects: the
 > **app registration** (the global *definition* — scopes, app roles, the groups claim) and
@@ -169,9 +177,13 @@ az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$
 ```
 
 Expect the three `AoU-*` groups on the non-admin `Agent.Access` role.
-If `/refresh` ever shows a **GUID** instead of `Agent.Admin` in the token's `roles`, the service
-principal predates the app role — recreate it (`az ad sp delete` then `az ad sp create`) and
-re-run the group + role assignments. (GCC: use `graph.microsoft.us`.)
+If a token has **GUIDs in `roles` but no `groups`**, check the API's optional group
+claims for **Emit groups as role claims** (`emit_as_roles`). That option moves groups
+into `roles` and suppresses assigned app-role values; it must not be enabled for this
+API. Also verify role values/assignments and obtain a fresh API access token.
+The symptom alone does not establish a stale service principal; do not delete it as
+the default recovery. See [the claims reference](docs/auth-design.md#4-group-and-role-claims).
+(For Azure Government Graph calls, use `graph.microsoft.us`.)
 
 #### Function Code Deployment
 
@@ -289,7 +301,7 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 | `az account get-access-token` → `AADSTS65001` (consent required) | Azure CLI not pre-authorized on the API scope — do *Configure the Entra identity* step 1, or run `az login --scope api://<API-APP-ID>/access_as_user` once. |
 | `/search` → `403` base group required | The token predates the group assignment (the script assigns the groups at deploy time). Get a fresh token; if it persists, verify the assignments (*Configure the Entra identity*). |
 | `/refresh` → `403` Admin role required | `Agent.Admin` not granted to the user (*Assign users & entitlements*) or a stale token. |
-| `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows a **GUID** (not `Agent.Admin`) | The enterprise app (service principal) was recreated **before** the app role existed, so its role copy is stale and emits the ID. Recreate the SP (`az ad sp delete` then `az ad sp create`), redo the group + role assignments, and get a fresh token. |
+| `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows **GUIDs** and `groups` is empty | Check the API's group optional claims for `emit_as_roles` (must be off), verify role values and assignments, and acquire a fresh API token. Do not infer a stale service principal or recreate it from this symptom alone. Also inspect the response body: Easy Auth can return 403 before Python authorization runs. |
 | `/refresh` → `500` on IHCC/CCDI | Outbound egress to the three public data domains is blocked (see the GCC egress caveat above). |
 | `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (*Configure the Entra identity* step 2). |
 

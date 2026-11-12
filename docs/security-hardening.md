@@ -1,105 +1,175 @@
-# Security Hardening (as-built)
+# Security Hardening (as-built controls and remaining gaps)
 
-**Status: Implemented** on branch `feature/multi-source`. This describes how the
-authorization and per-dataset access controls work in the code today. The design
-rationale is in [`auth-design.md`](auth-design.md); the remaining work is operator
-setup (assigning users to groups and loading data), at the end of this document.
+**Reviewed: 2026-11-07, implementation commit `23f9658`.** The controls below are
+implemented in the repository. This is not a claim of production readiness or a
+live-environment security certification. Access-model detail is in
+[`auth-design.md`](auth-design.md).
 
-## Overview
+## Implemented access controls
 
-Access is per-user and entitlement-based. Delegated Microsoft Entra sign-in flows
-the caller's identity to the Function (via App Service Authentication / "Easy Auth"),
-which the code maps to entitlements from the caller's group/role claims:
+- **Platform authentication:** ARM `authsettingsV2` enables Easy Auth, validates
+  the tenant's v2 issuer and both API audience forms, returns 401 for missing
+  authentication, and allowlists the connector client and Azure CLI. Only
+  `/api/health` is excluded. Function routes themselves are `ANONYMOUS`.
+- **Search entitlement:** `auth.has_base()` requires the configured base group.
+  `auth.entitled_keys()` selects public sources plus restricted sources whose
+  group IDs are held; `function_app._engine()` merges only that set.
+- **Refresh administration:** HTTP refresh requires `ADMIN_ROLE` (default
+  `Agent.Admin`). The role alone suffices; base/dataset memberships are not
+  required. The internal timer is not an HTTP caller.
+- **Group assignments:** the deployment creates `Agent.Access` and `Agent.Admin`;
+  all three `AoU-*` groups are assigned to non-admin `Agent.Access` on the API
+  enterprise application. Individual administrators get `Agent.Admin` separately.
+- **Classification:** `DATASET_CLASSIFICATION` is configuration-driven. The
+  deployed map restricts IHCC and CCDI independently and leaves publications and
+  projects public to base-entitled users.
 
-- `publication`, `project` — **public** (gated by the base group `AoU-Agent-Users`).
-- `ihcc`, `ccdi` — **restricted**, each requiring its own Entra group
-  (`AoU-DS-IHCC`, `AoU-DS-CCDI`). Compartments are independent (IHCC ≠ CCDI).
-- `/refresh` requires the **`Agent.Admin`** app role. `/health` is anonymous.
+`Agent.Access` establishes application assignments for filtered group claims;
+the Python authorization logic does not itself check that role. Groups must
+remain group-object-ID claims, not be emitted as role claims.
 
-Enforcement is gated by the **`AUTH_ENFORCED`** app setting, which the greenfield
-deployment sets to `true` — identity and entitlements are enforced from day one.
-The flag exists so the code can also run without Easy Auth for **local development**
-(`local.settings.json` sets it `false`, making all datasets visible locally); deployed
-environments always enforce. Function routes are `ANONYMOUS` at the Functions layer —
-Easy Auth is the platform gate and the code enforces the claims-based checks below.
+## Index isolation and packaging
 
-## How it works (as-built)
+Refresh creates per-dataset `index/<key>.pkl` blobs and
+`index/manifest.json`. Index records omit underscore-prefixed fields such as
+`_body`, while normalized-doc caches (`<key>.docs.json`) retain searchable text.
+Both cached documents and tokens can contain restricted information; they
+remain internal data, not a sanitized public export.
 
-### Per-dataset indexes
-Each dataset has its own index blob `index/<key>.pkl`. The refresh job builds and
-uploads one index per dataset plus a manifest `index/manifest.json` (per-dataset
-name, classification, count, updated_at). This lets the Function load **only** the
-datasets a caller is entitled to — restricted content is never even loaded for an
-unentitled caller.
+The request-specific BM25 engine includes only entitled dataset keys. A
+restricted index is not loaded on behalf of an unentitled search request, but
+can remain cached in a process after an entitled user has loaded it. Refresh
+intentionally processes all enabled datasets.
 
-- `storage.py` — `upload_index/download_index/get_index_etag` (blob `index/<key>.pkl`),
-  `upload_manifest/download_manifest`, `download_blob_with_etag/get_blob_etag`.
-- `refresh_job.py` — builds/uploads per-dataset indexes; a source that is unavailable
-  keeps its previous index (carried) so nothing is blanked; writes the manifest.
-- `search_core.py` — `load_artifact` (docs+tokens, no BM25) and `build_engine`
-  (merge parts into one BM25); `search` guards an empty engine.
-- `build_index.py` — writes packaged per-dataset indexes; `--public` skips restricted
-  datasets so **restricted data is never in the deployment package**.
+`code/.funcignore` excludes **all of `index/`** and the obsolete `corpus.pkl`.
+No indexes, including public ones, ship in the deployment package.
+`build_index.py` writes local development artifacts, not a deployed first-run
+fallback. Its `--public` option depends on classification supplied to that
+process; absent classification makes all source defaults public. Blob Storage
+must be populated by refresh before a fresh deployment has searchable data.
 
-### Two-level cache (function_app.py)
-1. **Per-index cache** — `{key: (docs, tokens, etag)}` loaded from Blob (or the
-   packaged `code/index/<key>.pkl` fallback), hot-reloaded on ETag change (throttled).
-2. **Per-entitlement engine cache** — `{sorted(keys): (docs, bm25, component etags)}`.
-   BM25 scores aren't comparable across separately-built indexes, so a **merged
-   engine is built over exactly the caller's entitled datasets** and cached by the
-   entitlement signature. Public-only callers share one merged engine.
+The two worker-local caches are per-index documents/tokens/ETag and per-entitlement
+merged engines/component ETags. They are not a distributed cache. See
+[`architecture.md`](architecture.md) for the shared ETag-throttle limitation.
 
-### Classification config (config-driven, no redeploy)
-`source_base.Source` carries `classification`, `entitlement_group_id`, and
-`index_blob`. These are applied from the **`DATASET_CLASSIFICATION`** app-settings
-JSON map by `sources.apply_classification()` — the source modules do **not** hardcode
-classification. A key absent from the config defaults to `public`. Helpers:
-`public_keys()`, `restricted_keys()`, `key_for_group(gid)`. Changing classification
-is an app-settings change (app restart), never a redeploy.
+## Infrastructure controls actually provisioned
 
-```jsonc
-DATASET_CLASSIFICATION = {
-  "ihcc": { "classification": "restricted", "entitlement_group_id": "<AoU-DS-IHCC guid>" },
-  "ccdi": { "classification": "restricted", "entitlement_group_id": "<AoU-DS-CCDI guid>" }
-}
+| Area | Current deployment behavior |
+|---|---|
+| Function | Flex Consumption, Python 3.12, VNet integration, system-assigned managed identity |
+| Storage | Standard LRS, minimum TLS 1.2, Blob/Queue/Table private endpoints plus linked private DNS zones |
+| Storage permissions | Function identity receives Blob, Queue, and Table Data Contributor at account scope |
+| Runtime storage connection | Removes `AzureWebJobsStorage` connection string; injects managed-identity account/credential and per-cloud service URIs |
+| Key Vault | RBAC authorization, explicit public network access enabled; no vault private endpoint |
+| Vault permissions | Deploying signed-in user gets Secrets Officer if resolvable; Function identity gets Secrets User |
+| Connector credential | Client secret stored as `connector-client-secret` when the data-plane write succeeds |
+| CORS | Selected Azure portal origins; CORS is not an authentication boundary |
+| Telemetry | Application Insights disabled; no Log Analytics, diagnostic settings, or alerts provisioned |
+
+Private endpoints **do not by themselves disable public storage access**. The
+script does not set storage public-network denial or disable shared-key access.
+Connection-string authentication remains a supported Python storage-helper
+fallback even though the deployed settings use managed identity.
+
+The Function has a Key Vault read role, but no code or app setting retrieves
+the connector secret at runtime. The operator reads it and enters it into the
+Power Platform connector. Other operators need their own vault data-plane
+permission. The script waits 30s for role propagation and attempts one secret
+write; on failure it logs a warning and **prints the secret** for manual use
+while continuing. This is not a private-link or policy-compliant fallback.
+Protect deployment console/transcript output and do not assume the secret was
+persisted merely because the final message says deployment completed.
+
+## Configuration reference
+
+| Setting | Purpose and current default |
+|---|---|
+| `AUTH_ENFORCED` | Deploy sets `true`; code defaults false and local settings use false |
+| `BASE_ENTITLEMENT_GROUP_ID` | Object ID of `AoU-Agent-Users`; missing/empty fails the base-group check |
+| `ADMIN_ROLE` | Literal role value for HTTP refresh; default `Agent.Admin` |
+| `DATASET_CLASSIFICATION` | JSON map of classification and entitlement-group IDs, read at import |
+| `CORPUS_CHECK_SECONDS` | Worker-wide ETag check interval; default 300, not a per-dataset freshness SLA |
+| `CORPUS_CONTAINER` | Internal cache container; default `cache` |
+| `INDEX_PREFIX`, `MANIFEST_BLOB` | Default `index/` and `index/manifest.json` |
+
+Changing classification is an app-settings update/restart, not code redeployment.
+Run refresh afterward to align the manifest metadata. **Invalid JSON is currently
+warned about and ignored; missing entries default public.** The system's
+missing-principal/base-group/admin-role checks fail closed, but its
+classification-input handling does not. Group-ID uniqueness and schema/value
+validation are also not enforced. Validate the persisted setting before allowing
+users to search; the deployment's JSON-file write protects quoting, not semantics.
+
+## Health disclosure and reliability boundaries
+
+Health intentionally returns restricted dataset names, classification, counts,
+source status, and manifest-entry timestamps without a token. It never returns
+records. The connector spec still inherits global OAuth for its health operation;
+anonymous API access and connector connection requirements are distinct.
+
+Health returns `status: ok` even when a dataset's stored status is `failed` or
+`carried`, or when the manifest is absent/unreadable and its dataset list is
+empty. It does not probe upstream APIs or validate storage health. Its timestamp
+is the manifest-entry write time, not last successful live ingest. It therefore
+does not yet meet an unconditional "enumerate every registered dataset" or
+readiness-check guarantee.
+
+Source-exception carry-forward protects a previous index only when fetch and
+cache recovery cannot return documents. Successful partial/empty responses can
+replace an existing index and reduce counts. Upload failures can leave partially
+updated indexes with an old manifest. No refresh lock, atomic snapshot, durable
+job, or last-successful-refresh tracking is implemented.
+
+## Tests and review findings
+
+The offline suite covers normalizers, the shared source contract, HTTP fallback,
+storage helpers, artifacts/BM25, per-index and entitlement caches, manifest
+responses, and the Python authorization matrix. At this review it reports
+**105 passed, 4 live tests deselected, 94.63% line coverage**. CI runs Python 3.11
+and 3.12 with an 85% coverage gate.
+
+From the repository root:
+
+```powershell
+python -m pytest -m "not live" --cov=code --cov-fail-under=85
 ```
 
-### Authorization (auth.py + function_app.py)
-`auth.py` parses `X-MS-CLIENT-PRINCIPAL` (groups, roles, oid) and resolves
-entitlements. Checks fail closed and only apply when `AUTH_ENFORCED=true`.
+These are mocked/offline tests, not validation of live Entra consent, group/role
+token issuance, Easy Auth rejection rules, government availability, networking,
+or Copilot Studio end-user connection configuration.
 
-| Endpoint | Behavior when enforced |
+Outstanding code/deployment issues found during the as-built review:
+
+| Issue | Impact / follow-up needed |
 |---|---|
-| `GET/POST /api/search` | Require the base group (`BASE_ENTITLEMENT_GROUP_ID`) → else `401`/`403`. Load a merged engine over the caller's entitled datasets only (public + restricted groups they hold). |
-| `POST /api/refresh` | Require the `Agent.Admin` role (`ADMIN_ROLE`) → else `401`/`403`. The internal daily timer is unaffected (runs in-process, no token). |
-| `GET /api/health` | Anonymous; enumerates **every** dataset (incl. restricted) with name + count from the manifest. Intentionally discloses restricted dataset names + counts (not content). |
+| Missing/invalid classification defaults public | Strict startup validation and an explicit fail-closed classification policy are needed; current JSON-file deployment handling alone is insufficient. |
+| Shared ETag throttle checks only request keys | A cached restricted index can stay stale while public-only requests consume every check window; per-index check scheduling is needed for a bounded freshness guarantee. |
+| Synchronous HTTP refresh with slow CCDI | Work can exceed Azure's 230s HTTP response limit; an asynchronous job pattern is not implemented. |
+| Missing-manifest health says OK with no datasets | Does not distinguish empty/uninitialized state from storage failure or enumerate registered sources; explicit readiness/error reporting is needed. |
+| Native CLI errors are generally not fail-fast | Except for the unresolved-group guard, deployment can continue after failed commands and report completion for partial setup. |
+| Cleanup is name-based across the tenant | It can delete apps/groups used by another deployment; it is not limited by the selected resource-group suffix. |
 
-### App settings
-| Setting | Purpose |
-|---|---|
-| `AUTH_ENFORCED` | `true` enables claims checks (set `true` by the deployment; `false` only for local dev) |
-| `BASE_ENTITLEMENT_GROUP_ID` | Entra object id of `AoU-Agent-Users` |
-| `ADMIN_ROLE` | app role for refresh (default `Agent.Admin`) |
-| `DATASET_CLASSIFICATION` | JSON map of per-dataset classification + group ids |
+Storage download/ETag helpers broadly catch exceptions and return missing-data
+values without logging. Authentication parsing also has silent failure paths.
+Structured operational metrics, denial reasons, and dependency traces are not
+implemented. [`../plans/observability-plan.md`](../plans/observability-plan.md)
+is a **proposal**, not deployed telemetry.
 
-## Tests
-`tests/` covers per-dataset storage, the merged engine + hot-reload, manifest health,
-config-driven classification, and the full authorization matrix (401 unauth, 403 no
-base group, base-user = public only, IHCC-entitled adds IHCC not CCDI, admin-gated
-refresh). Suite: 107 tests, ~94% coverage.
+The Power Platform solution export includes Invoker-mode connector actions, but
+also enabled web browsing and a generative Search fallback. Its stale result-type
+and health-freshness instructions need alignment with the four-source API.
+Consequently, "only answer from the search tool" is currently an instruction,
+not a structural restriction in that export. See
+[`architecture.md`](architecture.md#6-checked-in-power-platform-export).
 
-## Operator setup (after the greenfield deployment)
-The greenfield [`../deployment/deploy_azure_infrastructure.ps1`](../deployment/deploy_azure_infrastructure.ps1)
-stands everything up in one run — the API + client app registrations, the groups
-(`AoU-Agent-Users`, `AoU-DS-IHCC`, `AoU-DS-CCDI`), the `Agent.Admin` role, **Easy Auth**
-(Return 401 with `/api/health` excluded), a **Key Vault** for the connector secret,
-and the auth app settings (with `AUTH_ENFORCED=true`). After it runs and the code is
-published:
+## Operator handoff
 
-1. **Assign users** to `AoU-Agent-Users` (base) and to `AoU-DS-IHCC` / `AoU-DS-CCDI`
-   as needed; grant the `Agent.Admin` app role to admins.
-2. **Load data:** POST `/api/refresh` with an admin's Entra bearer token, or wait for
-   the daily timer. Public datasets are already available from the packaged indexes;
-   restricted datasets appear after the first refresh.
-3. **Import the connector** (`../custom_connector/openapi-swagger.yaml`, delegated
-   Entra OAuth 2.0) in Copilot Studio using the client app id + the Key Vault secret.
+Follow [`../readme.md`](../readme.md) and the caveats in
+[`multi-cloud-deployment.md`](multi-cloud-deployment.md): verify cloud/tenant,
+pre-authorize delegated clients, configure the connector callback URI, assign
+users/groups/admins, publish, obtain a fresh API token, load data, and test the
+entitlement matrix. Confirm each command's success; script completion alone is
+not evidence that the controls above are active.
+
+Code and infrastructure were reviewed but not modified in this documentation
+update. No live resources were created, refreshed, or deleted.
