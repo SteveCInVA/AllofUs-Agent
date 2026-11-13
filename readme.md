@@ -17,11 +17,11 @@ The agent searches four source families for work similar to a description the us
 
 ---
 - Steve Carroll - Microsoft
-- Intial version:  2026-07-10
+- Initial version:  2026-07-10
   - Updated:       2026-07-31 - Support cache refresh / expiration
   - Updated:       2026-09-15 - Improved handling of new datasets + added in IHCC and CCDI datasets.
                               - Incorporated Security Model to handle public / restricted data handling
-                              - Updated documentation / deployment for configuration in Azure Commericial / GCC
+                              - Updated documentation / deployment for configuration in Azure Commercial / GCC
   - Updated:       2026-09-22 - Finalized entitlement-based greenfield deployment flow, managed-identity storage auth, Easy Auth enforcement, and testing script workflow
 
 
@@ -142,16 +142,26 @@ Deployment will perform the following:
     - Create a private endpoint in the existing private-endpoint subnet, private DNS zone, and VNet link
     - Grant the Function identity Search Index Data Reader, Search Index Data Contributor, and Search Service Contributor
     - Set `AZURE_SEARCH_ENDPOINT` and cloud-specific `AZURE_SEARCH_AUDIENCE`
+    - Grant the Azure CLI deployer Search Service Contributor, create/update the index from `index.json`, and verify it with a read-back request
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
 
-Search provisioning is infrastructure-only: current application retrieval remains
-Blob-backed BM25. No Search indexes, embeddings, or Azure OpenAI resources are
-created. Basic capacity and Private Link incur charges; the free semantic ranker
+Search provisioning creates the empty index defined in `index.json`; current
+application retrieval remains Blob-backed BM25. No documents, embeddings, or Azure
+OpenAI resources are loaded or created by the Search step. Basic capacity and Private Link incur charges; the free semantic ranker
 allowance does not make the service free. Review region/cloud availability before
 deployment. Search data-plane administration requires a host with private VNet
 connectivity and appropriate Search RBAC; allow time for role propagation.
-Validate private DNS resolution and an authenticated Search request from that
-network before treating Search as ready.
+Run the deployment script from a host with private VNet connectivity, since index
+creation uses the private Search data endpoint. The script retries failed index
+requests up to 20 times, waiting 30 seconds between attempts for RBAC, DNS, or
+service readiness, then fails explicitly if creation or read-back verification
+fails. It never enables public Search access or API keys. Existing compatible
+indexes are updated without deleting documents; incompatible schema changes fail
+and require a separately planned migration.
+
+See [Azure AI Search Index Structure](docs/search-index.md) for the initial
+[index definition](index.json), common and source-specific field tables, security
+filtering requirements, and semantic ranking configuration.
 
 #### Configure the Entra identity (verify + authorize the connector)
 
@@ -300,7 +310,7 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 |$rg|"rg-allofus-demo01"|Deployment resource group name|
 |$sfx|"aou1234"|Suffix defined in deployment steps|
 |$app|"func-allofus-$sfx"|Not needed unless changed in deployment|
-|$uri|"https://$app.azurewebsites.net/api"|Not needed unless operating in other than commericial Azure subscription|
+|$uri|"https://$app.azurewebsites.net/api"|Not needed unless operating in other than commercial Azure subscription|
 
 ### Testing functions
 - Health - anonymous; returns every dataset (including restricted ones) with its name, classification, and record count, read from the manifest (`index/manifest.json`)

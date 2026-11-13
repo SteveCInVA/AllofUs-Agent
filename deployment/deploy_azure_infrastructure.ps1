@@ -2,13 +2,13 @@
 #
 # Stands up the whole solution from scratch in one run: resource group, Entra app
 # registrations + groups + admin role, VNet + private endpoints, storage, Function
-# App (system-assigned managed identity), Azure AI Search, Key Vault, role assignments, Easy Auth,
+# App (system-assigned managed identity), Azure AI Search + index, Key Vault, role assignments, Easy Auth,
 # and all app settings (including entitlement-based authorization, enforced from
 # day one). After this runs, publish the code and assign users to the groups.
 #
 # Assumes an existing subscription and a caller with rights to create these objects
 # (including Entra Application Administrator / Cloud App Admin for the app
-# registrations, groups, and role).
+# registrations, groups, and role), plus private VNet connectivity to Search.
 
 ##################################################
 # update the following variables as required
@@ -23,6 +23,8 @@ $searchSku = "basic"
 $searchReplicaCount = 1       # Development capacity; review replicas/SLA for production.
 $searchPartitionCount = 1
 $searchSemanticSearch = "free"
+$searchIndexFile = Join-Path (Split-Path $PSScriptRoot -Parent) "index.json"
+$searchApiVersion = "2024-07-01"
 $vnetName = "vnet-allofus"
 $vnetAddressSpace = "192.168.0.0/24"
 $funcSubnetName = "pe-functions"
@@ -57,6 +59,15 @@ switch ($cloud) {
   }
 }
 ##################################################
+
+if (-not (Test-Path -LiteralPath $searchIndexFile -PathType Leaf)) {
+  throw "Search index definition not found: '$searchIndexFile'."
+}
+$searchIndexDefinition = Get-Content -LiteralPath $searchIndexFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+$searchIndexName = $searchIndexDefinition.name
+if ([string]::IsNullOrWhiteSpace($searchIndexName)) {
+  throw "Search index definition '$searchIndexFile' must specify a name."
+}
 
 # Target the correct Azure cloud BEFORE login (commercial vs. government)
 az cloud set --name $cloud
@@ -336,6 +347,59 @@ if ($LASTEXITCODE -ne 0) {
   throw "Failed to configure Azure AI Search settings on Function '$functionSvcName'."
 }
 
+# ============================================================ 5b. Search index
+$searchCallerJson = az account show --query user -o json
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to determine the Azure CLI identity for Search index creation."
+}
+$searchCaller = $searchCallerJson | ConvertFrom-Json -ErrorAction Stop
+switch ($searchCaller.type) {
+  "user" {
+    $searchDeployerId = az ad signed-in-user show --query id -o tsv
+    $searchDeployerType = "User"
+  }
+  "servicePrincipal" {
+    $searchDeployerId = az ad sp show --id $searchCaller.name --query id -o tsv
+    $searchDeployerType = "ServicePrincipal"
+  }
+  default {
+    throw "Unsupported Azure CLI identity type '$($searchCaller.type)' for Search index creation."
+  }
+}
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($searchDeployerId)) {
+  throw "Failed to resolve the deployer's object ID for Search index creation."
+}
+az role assignment create --assignee-object-id $searchDeployerId --assignee-principal-type $searchDeployerType `
+  --role "Search Service Contributor" --scope $searchId -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to grant the deployer Search Service Contributor on '$searchSvcName'."
+}
+
+$searchIndexUri = "$searchEndpoint/indexes/$($searchIndexName)?api-version=$searchApiVersion"
+$searchIndexCreated = $false
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+  Write-Output "Creating or updating Search index '$searchIndexName' (attempt $attempt/20)..."
+  $indexResult = az rest --method put --uri $searchIndexUri --resource $searchAudience `
+    --headers "Content-Type=application/json" --body "@$searchIndexFile" -o none 2>&1
+  if ($LASTEXITCODE -eq 0) {
+    $searchIndexCreated = $true
+    break
+  }
+  Write-Warning "Search index request failed: $($indexResult -join [Environment]::NewLine)"
+  if ($attempt -lt 20) {
+    Write-Output "Waiting 30s for Search RBAC, private DNS, or service readiness..."
+    Start-Sleep -Seconds 30
+  }
+}
+if (-not $searchIndexCreated) {
+  throw "Failed to create Search index '$searchIndexName'. Run from a host connected to the private VNet; verify private DNS, Search RBAC propagation, and the index definition. Public access and API keys remain disabled."
+}
+$verifiedIndexName = az rest --method get --uri $searchIndexUri --resource $searchAudience --query name -o tsv
+if ($LASTEXITCODE -ne 0 -or $verifiedIndexName -ne $searchIndexName) {
+  throw "Could not verify Search index '$searchIndexName' after creation."
+}
+Write-Output "Verified Search index '$verifiedIndexName'. No documents have been loaded by this step."
+
 write-output "Setting up Key Vault '$kvName' and storing connector secret..."
 # ============================================================ 6. Key Vault (connector secret)
 # NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets - being
@@ -466,6 +530,7 @@ Write-Output ""
 Write-Output "Deployment complete."
 Write-Output "  Function:     https://$functionSvcName.$functionHostSuffix"
 Write-Output "  AI Search:    $searchEndpoint (private, managed identity only)"
+Write-Output "  Search index: $searchIndexName"
 Write-Output "  API appId:    $apiApp"
 if ($kvSecretStored) {
   Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"

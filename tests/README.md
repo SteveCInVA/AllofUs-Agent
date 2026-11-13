@@ -40,8 +40,10 @@ Invoke-Pester -Path .\tests\deploy_azure_infrastructure.Tests.ps1 -Output Detail
 
 These offline tests execute only the Search provisioning section with a fake
 Azure CLI. They cover commercial/government endpoint configuration, private
-networking, managed-identity roles, app settings, and stopping on provisioning
-failures. They do not create Azure resources or verify live connectivity.
+networking, managed-identity roles, app settings, JSON index creation/read-back,
+deployer user/service-principal roles, bounded retries, and stopping on
+provisioning failures. They do not create Azure resources or verify live
+connectivity.
 
 ## Layout
 

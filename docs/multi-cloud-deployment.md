@@ -52,8 +52,12 @@ examples as a discovered live deployment. The script:
    private DNS and VNet link. Grants the Function Search Index Data Reader,
    Search Index Data Contributor, and Search Service Contributor; configures
    `AZURE_SEARCH_ENDPOINT` and `AZURE_SEARCH_AUDIENCE`. Search provisioning errors
-   terminate the script. Existing retrieval is unchanged; indexes, embeddings,
-   and Azure OpenAI resources are not provisioned.
+   terminate the script. Grants the Azure CLI deployer Search Service Contributor,
+   creates or updates the empty index from [index.json](../index.json), and verifies
+   it by reading it back. Run from a private-VNet-connected host; index writes
+   retry up to 20 times with 30-second waits for RBAC/DNS/service readiness.
+   Existing retrieval is unchanged; documents, embeddings, and Azure OpenAI
+   resources are not provisioned. See [Search Index Structure](search-index.md).
 5. Creates an RBAC Key Vault with public network access enabled, grants deployer
    Secrets Officer and Function Secrets User, and tries to store the connector
    secret after a 30s wait. Failed writes warn and print the secret; no vault

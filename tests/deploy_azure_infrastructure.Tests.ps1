@@ -3,9 +3,16 @@ Describe "Azure AI Search infrastructure (offline)" {
     $deploymentPath = Join-Path $PSScriptRoot "..\deployment\deploy_azure_infrastructure.ps1"
     $deploymentSource = Get-Content -Raw $deploymentPath
     $configuration = $deploymentSource.Substring(0, $deploymentSource.IndexOf("# Target the correct Azure cloud"))
+    $indexPathAssignment = '$searchIndexFile = "' + (Join-Path $PSScriptRoot "..\index.json") + '"'
+    $configuration = $configuration.Replace(
+      '$searchIndexFile = Join-Path (Split-Path $PSScriptRoot -Parent) "index.json"',
+      $indexPathAssignment
+    )
     $searchStart = $deploymentSource.IndexOf("# ============================================================ 5a.")
-    $searchEnd = $deploymentSource.IndexOf('write-output "Setting up Key Vault')
+    $searchEnd = $deploymentSource.IndexOf("# ============================================================ 5b.")
     $searchSetup = [scriptblock]::Create($deploymentSource.Substring($searchStart, $searchEnd - $searchStart))
+    $indexEnd = $deploymentSource.IndexOf('write-output "Setting up Key Vault')
+    $indexSetup = [scriptblock]::Create($deploymentSource.Substring($searchEnd, $indexEnd - $searchEnd))
 
     function az {
       $script:commands.Add(@($args))
@@ -17,6 +24,20 @@ Describe "Azure AI Search infrastructure (offline)" {
       if (($args[0..2] -join " ") -eq "search service create" -and -not $script:emptySearchId) {
         return $script:searchResourceId
       }
+      if (($args[0..1] -join " ") -eq "account show") {
+        return (@{ type = $script:callerType; name = "deployer-app-id" } | ConvertTo-Json -Compress)
+      }
+      if (($args[0..2] -join " ") -in @("ad signed-in-user show", "ad sp show")) {
+        return "deployer-object-id"
+      }
+      if (($args[0..2] -join " ") -eq "rest --method put" -and $script:putFailures -gt 0) {
+        $script:putFailures--
+        $global:LASTEXITCODE = 1
+        return "Search endpoint not ready"
+      }
+      if (($args[0..2] -join " ") -eq "rest --method get") {
+        return $script:verifiedName
+      }
     }
   }
 
@@ -24,6 +45,10 @@ Describe "Azure AI Search infrastructure (offline)" {
     $script:commands = New-Object System.Collections.Generic.List[object]
     $script:failAt = 0
     $script:emptySearchId = $false
+    $script:callerType = "user"
+    $script:putFailures = 0
+    $script:verifiedName = "allofus-content"
+    Mock Start-Sleep {}
     $sami = "function-principal-id"
     $script:searchResourceId = "/subscriptions/test/resourceGroups/test/providers/Microsoft.Search/searchServices/test"
   }
@@ -81,6 +106,78 @@ Describe "Azure AI Search infrastructure (offline)" {
     . ([scriptblock]::Create($configuration))
     $sami = ""
     { . $searchSetup } | Should -Throw
+    $script:commands.Count | Should -Be 0
+  }
+
+  It "creates and verifies the JSON index in <Cloud> as <CallerType>" -TestCases @(
+    @{ Cloud = "AzureCloud"; CallerType = "user"; PrincipalType = "User"; Audience = "https://search.azure.com"; Suffix = "search.windows.net" },
+    @{ Cloud = "AzureUSGovernment"; CallerType = "servicePrincipal"; PrincipalType = "ServicePrincipal"; Audience = "https://search.azure.us"; Suffix = "search.azure.us" }
+  ) {
+    param($Cloud, $CallerType, $PrincipalType, $Audience, $Suffix)
+    . ([scriptblock]::Create($configuration.Replace('$cloud = "AzureCloud"', ('$cloud = "' + $Cloud + '"'))))
+    . $searchSetup
+    $script:callerType = $CallerType
+    . $indexSetup
+
+    $assignment = @($script:commands | Where-Object { $_ -contains "deployer-object-id" -and $_ -contains "Search Service Contributor" })
+    $assignment.Count | Should -Be 1
+    ($assignment[0] -join " ") | Should -Match "--assignee-principal-type $PrincipalType"
+    ($assignment[0] -join " ") | Should -Match ([regex]::Escape("--scope $script:searchResourceId"))
+    $requests = @($script:commands | Where-Object { $_[0] -eq "rest" })
+    $requests.Count | Should -Be 2
+    $expectedUri = "https://$searchSvcName.$Suffix/indexes/allofus-content?api-version=2024-07-01"
+    $requests[0] | Should -Contain $expectedUri
+    $requests[0] | Should -Contain $Audience
+    $requests[0] | Should -Contain "@$searchIndexFile"
+    ($requests[0] -join " ") | Should -Match "--method put"
+    ($requests[1] -join " ") | Should -Match "--method get"
+    Should -Invoke Start-Sleep -Times 0 -Exactly
+  }
+
+  It "retries index creation after a transient failure" {
+    . ([scriptblock]::Create($configuration))
+    . $searchSetup
+    $script:putFailures = 1
+    . $indexSetup
+    @($script:commands | Where-Object { ($_[0..2] -join " ") -eq "rest --method put" }).Count | Should -Be 2
+    Should -Invoke Start-Sleep -Times 1 -Exactly -ParameterFilter { $Seconds -eq 30 }
+  }
+
+  It "fails after bounded index retries without reporting verification" {
+    . ([scriptblock]::Create($configuration))
+    . $searchSetup
+    $script:putFailures = 20
+    { . $indexSetup } | Should -Throw "*host connected to the private VNet*"
+    @($script:commands | Where-Object { ($_[0..2] -join " ") -eq "rest --method put" }).Count | Should -Be 20
+    @($script:commands | Where-Object { ($_[0..2] -join " ") -eq "rest --method get" }).Count | Should -Be 0
+    Should -Invoke Start-Sleep -Times 19 -Exactly
+  }
+
+  It "stops before index requests when deployer operation <Operation> fails" -TestCases @(
+    1..3 | ForEach-Object { @{ Operation = $_ } }
+  ) {
+    param($Operation)
+    . ([scriptblock]::Create($configuration))
+    . $searchSetup
+    $script:failAt = $script:commands.Count + $Operation
+    { . $indexSetup } | Should -Throw
+    $script:commands.Count | Should -Be $script:failAt
+  }
+
+  It "rejects a mismatched index verification response" {
+    . ([scriptblock]::Create($configuration))
+    . $searchSetup
+    $script:verifiedName = "wrong-index"
+    { . $indexSetup } | Should -Throw "*Could not verify Search index*"
+  }
+
+  It "rejects a missing index file before invoking Azure" {
+    $missingPath = Join-Path $TestDrive "missing-index.json"
+    $invalidConfiguration = $configuration.Replace(
+      $indexPathAssignment,
+      ('$searchIndexFile = "' + $missingPath + '"')
+    )
+    { . ([scriptblock]::Create($invalidConfiguration)) } | Should -Throw "*Search index definition not found*"
     $script:commands.Count | Should -Be 0
   }
 }
