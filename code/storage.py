@@ -183,6 +183,7 @@ def replace_dataset(source: Source, records: list) -> int:
 
 
 def dataset_info(source: Source) -> dict:
+    """Count all source records while retrieving only the latest ingestion timestamp."""
     results = _client().search(
         search_text="*", filter=_source_filter(source.key),
         select=["ingested_at"], order_by=["ingested_at desc"],
@@ -202,7 +203,7 @@ def dataset_info(source: Source) -> dict:
 
 
 def load_manifest() -> dict:
-    """Keep the health response shape without storing a separate manifest."""
+    """Return enabled-source summaries from Search counts, without document content."""
     datasets = [dataset_info(source) for source in get_enabled_sources()]
     return {"total": sum(dataset["count"] for dataset in datasets), "datasets": datasets}
 

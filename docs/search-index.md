@@ -117,6 +117,26 @@ tokenizes the description into plain search terms and uses Search's simple
 full-text query with any-term matching. Ranking now comes from Azure AI Search,
 not the old in-process BM25 engine; relevance scores/order can differ.
 
+The `directory` input selects the shared index's `source` field, not a separate
+index. The handler intersects this selection with the caller's entitled source
+keys before issuing the Search request:
+
+| `directory` input | Indexed source selection |
+|---|---|
+| `publication`, `publications` | `source eq 'publication'` |
+| `project`, `projects` | `source eq 'project'` |
+| `ihcc` | `source eq 'ihcc'` |
+| `ccdi` | `source eq 'ccdi'` |
+| `all`, `both`, or omitted | All enabled sources the caller may access |
+| Unrecognized value | Existing fallback to `both` |
+
+These source clauses are combined with indexed security checks when authorization
+is enforced. Selecting a source the caller cannot access returns no matches; it
+never broadens access. The legacy `source` request parameter remains an alias for
+`directory`. GET query-string and POST JSON inputs retain the same response
+shape and `directory` echo; plural aliases are mapped internally, not rewritten
+in the response.
+
 Results retain their previous API shapes: `id` is the original source-record ID,
 `institutions` is a comma-separated display string, `citations` is a string,
 and `score` is numeric. Full `content`, indexed permission metadata, and internal
@@ -133,6 +153,11 @@ last refresh; `updated_at` is the latest document's `ingested_at`, or `null` for
 an empty dataset. Failed source fetches do not advance that timestamp.
 Search errors return HTTP 503 rather than an empty success.
 Health does not probe upstream sources or certify a complete successful refresh.
+Counts come from Search's total match count for each `source`, not the number
+of documents returned in a page: only one document's ingestion timestamp is
+retrieved per source. Only configured, enabled sources contribute to `total`.
+The anonymous response never includes document IDs, titles, snippets, full
+`content`, or `allowed_group_ids`; use the authorized search endpoint for records.
 
 ## Field attributes
 

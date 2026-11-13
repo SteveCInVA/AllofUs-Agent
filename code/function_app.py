@@ -16,6 +16,7 @@ import azure.functions as func
 import storage
 import auth
 from refresh_job import rebuild_and_upload
+from search_core import resolve_filter
 from sources import source_keys
 
 # Routes are ANONYMOUS at the Functions layer; App Service Authentication ("Easy
@@ -44,6 +45,7 @@ def _authorize_search(req):
 
 @app.route(route="search", methods=["GET", "POST"])
 def search_directories(req: func.HttpRequest) -> func.HttpResponse:
+    """Search the shared Azure index, mapping directory selection to entitled source keys."""
     body = {}
     if req.method == "POST":
         try:
@@ -74,9 +76,11 @@ def search_directories(req: func.HttpRequest) -> func.HttpResponse:
     if err is not None:
         return err
 
+    requested_source = resolve_filter(directory)
+    selected_keys = [key for key in keys if requested_source is None or key == requested_source]
     try:
         results = storage.search_records(
-            query, keys, directory, top, enforce_security=auth.enforced())
+            query, selected_keys, top=top, enforce_security=auth.enforced())
     except Exception as exc:  # noqa: BLE001
         logging.exception("search failed")
         return func.HttpResponse(
@@ -131,6 +135,7 @@ def refresh_now(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def health(req: func.HttpRequest) -> func.HttpResponse:
+    """Return anonymous source summaries from Search, never indexed document content."""
     try:
         manifest = storage.load_manifest()
     except Exception:  # noqa: BLE001

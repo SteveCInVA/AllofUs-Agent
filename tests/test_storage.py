@@ -256,16 +256,46 @@ def test_failed_later_upload_batch_prevents_all_cleanup(client, monkeypatch):
 
 
 def test_health_counts_indexed_sources_without_a_manifest_blob(client, monkeypatch):
-    source = _source()
-    monkeypatch.setattr(storage, "get_enabled_sources", lambda: [source, _source("ihcc")])
-    storage.replace_dataset(source, [_record()])
+    public = _source()
+    restricted = _source("ihcc", "restricted", "GROUP")
+    empty = _source("ccdi")
+    monkeypatch.setattr(storage, "get_enabled_sources", lambda: [public, restricted, empty])
+    timestamps = ["2026-11-11T10:00:00Z", "2026-11-13T10:00:00Z", "2026-11-12T10:00:00Z"]
+    for i, timestamp in enumerate(timestamps):
+        document = storage.search_document(public, _record(record_id=f"pub-{i}"), timestamp)
+        client.documents[document["id"]] = document
+    storage.replace_dataset(restricted, [_record("ihcc", "cohort-1"), _record("ihcc", "cohort-2")])
+    client.calls.clear()
     manifest = storage.load_manifest()
-    assert manifest["total"] == 1
-    assert manifest["datasets"][0]["status"] == "indexed"
-    assert manifest["datasets"][0]["updated_at"]
-    assert manifest["datasets"][1]["count"] == 0
-    assert manifest["datasets"][1]["status"] == "empty"
-    assert manifest["datasets"][1]["updated_at"] is None
+    datasets = {dataset["key"]: dataset for dataset in manifest["datasets"]}
+    assert manifest["total"] == 5
+    assert {key: dataset["count"] for key, dataset in datasets.items()} == {
+        "publication": 3, "ihcc": 2, "ccdi": 0}
+    assert datasets["publication"]["status"] == "indexed"
+    assert datasets["publication"]["updated_at"] == "2026-11-13T10:00:00Z"
+    assert datasets["ihcc"]["classification"] == "restricted"
+    assert datasets["ihcc"]["updated_at"]
+    assert datasets["ccdi"]["status"] == "empty"
+    assert datasets["ccdi"]["updated_at"] is None
+    assert len(client.calls) == 3
+    for operation, request in client.calls:
+        assert operation == "search"
+        assert request["select"] == ["ingested_at"]
+        assert request["top"] == 1 and request["include_total_count"] is True
+        assert request["order_by"] == ["ingested_at desc"]
+
+
+def test_health_missing_search_count_returns_unavailable_not_zero(client, monkeypatch):
+    import azure.functions as func
+    import function_app
+
+    monkeypatch.setattr(storage, "get_enabled_sources", lambda: [_source()])
+    monkeypatch.setattr(client, "search", lambda **kwargs: SearchResults(count=None))
+    handler = function_app.health.build().get_user_function()
+    response = handler(func.HttpRequest(
+        method="GET", url="/api/health", params={}, body=b""))
+    assert response.status_code == 503
+    assert json.loads(response.get_body()) == {"error": "Azure AI Search is unavailable."}
 
 
 def test_search_filters_entitlements_and_returns_legacy_field_types(client, monkeypatch):
@@ -311,6 +341,82 @@ def test_stale_classification_and_group_are_excluded_until_reimport(client, monk
     assert storage.search_records("asthma", ["ihcc"]) == []
 
 
+@pytest.mark.parametrize("method,parameter,directory,expected_source", [
+    ("GET", "directory", "publication", "publication"),
+    ("POST", "directory", "publications", "publication"),
+    ("POST", "directory", "project", "project"),
+    ("GET", "directory", "projects", "project"),
+    ("GET", "directory", "ihcc", "ihcc"),
+    ("POST", "source", "ccdi", "ccdi"),
+    ("GET", "directory", "all", None),
+    ("POST", "directory", "both", None),
+    ("GET", "directory", "unknown", None),
+])
+def test_http_directory_maps_to_search_source_field(
+        client, monkeypatch, method, parameter, directory, expected_source):
+    import azure.functions as func
+    import function_app
+
+    enabled = [_source(key) for key in ("publication", "project", "ihcc", "ccdi")]
+    monkeypatch.setattr(sources, "ALL_SOURCES", enabled)
+    monkeypatch.setenv("AUTH_ENFORCED", "false")
+    for source in enabled:
+        storage.replace_dataset(source, [_record(source.key, f"{source.key}-1")])
+    client.calls.clear()
+    values = {"query": "asthma", parameter: directory, "top": 4}
+    request = func.HttpRequest(
+        method=method, url="/api/search",
+        params=values if method == "GET" else {},
+        body=json.dumps(values).encode() if method == "POST" else b"")
+    response = function_app.search_directories.build().get_user_function()(request)
+    payload = json.loads(response.get_body())
+    expected_keys = {expected_source} if expected_source else {source.key for source in enabled}
+    assert response.status_code == 200
+    assert set(payload) == {"query", "directory", "count", "results"}
+    assert payload["directory"] == ("both" if directory == "unknown" else directory)
+    assert payload["count"] == len(expected_keys)
+    assert {row["source"] for row in payload["results"]} == expected_keys
+    assert all(row["url"] and isinstance(row["score"], float) for row in payload["results"])
+    assert len(client.calls) == 1 and client.calls[0][0] == "search"
+    search_request = client.calls[0][1]
+    assert set(re.findall(r"source eq '([^']+)'", search_request["filter"])) == expected_keys
+    assert search_request["top"] == 4
+
+
+def test_http_directory_cannot_expand_entitlements(client, monkeypatch):
+    import base64
+    import azure.functions as func
+    import function_app
+
+    enabled = [_source(), _source("ihcc", "restricted", "GROUP")]
+    monkeypatch.setattr(sources, "ALL_SOURCES", enabled)
+    monkeypatch.setenv("AUTH_ENFORCED", "true")
+    monkeypatch.setenv("BASE_ENTITLEMENT_GROUP_ID", "BASE")
+    for source in enabled:
+        storage.replace_dataset(source, [_record(source.key)])
+    handler = function_app.search_directories.build().get_user_function()
+
+    def request(directory, groups):
+        claims = [{"typ": "groups", "val": group} for group in groups]
+        principal = base64.b64encode(json.dumps({"claims": claims}).encode()).decode()
+        return func.HttpRequest(
+            method="GET", url="/api/search", body=b"",
+            params={"query": "asthma", "directory": directory},
+            headers={"x-ms-client-principal": principal})
+
+    client.calls.clear()
+    denied = handler(request("ihcc", ["BASE"]))
+    assert denied.status_code == 200 and json.loads(denied.get_body())["results"] == []
+    assert not client.calls
+    public = json.loads(handler(request("all", ["BASE"])).get_body())
+    assert {row["source"] for row in public["results"]} == {"publication"}
+    restricted = json.loads(handler(request("ihcc", ["BASE", "GROUP"])).get_body())
+    assert {row["source"] for row in restricted["results"]} == {"ihcc"}
+    assert client.calls[-1][1]["filter"] == (
+        "(source eq 'ihcc' and security_type eq 'restricted'"
+        " and allowed_group_ids/any(g: g eq 'GROUP'))")
+
+
 @pytest.mark.smoke
 def test_real_sdk_import_search_and_health_round_trip(monkeypatch):
     """Run real SDK serialization/paging against an in-memory HTTP transport."""
@@ -319,6 +425,8 @@ def test_real_sdk_import_search_and_health_round_trip(monkeypatch):
     from azure.core.pipeline.transport import HttpResponse, HttpTransport
     from azure.search.documents import SearchClient
     import refresh_job
+    import function_app
+    import azure.functions as func
     from conftest import load_fixture
 
     backend = FakeSearch()
@@ -389,7 +497,44 @@ def test_real_sdk_import_search_and_health_round_trip(monkeypatch):
         assert set(backend.documents) == first_keys
         results = storage.search_records("childhood asthma cancer cohort", list(fixtures))
         assert results and all(row["url"] for row in results)
-        assert storage.load_manifest()["total"] == summary["records"]
+        monkeypatch.setenv("AUTH_ENFORCED", "false")
+        search_handler = function_app.search_directories.build().get_user_function()
+        response = search_handler(func.HttpRequest(
+            method="POST", url="/api/search", params={},
+            body=json.dumps({"query": "health cohort", "directory": "ihcc", "top": 2}).encode()))
+        payload = json.loads(response.get_body())
+        assert response.status_code == 200 and payload["count"] > 0
+        assert payload["directory"] == "ihcc" and payload["count"] <= 2
+        assert {row["source"] for row in payload["results"]} == {"ihcc"}
+        assert requests[-1][1]["filter"] == "(source eq 'ihcc')"
+        assert requests[-1][1]["top"] == 2
+        monkeypatch.setenv("AUTH_ENFORCED", "true")
+        monkeypatch.setattr(sources.get_source("ihcc"), "classification", "restricted")
+        monkeypatch.setattr(sources.get_source("ihcc"), "entitlement_group_id", "GROUP")
+        health_start = len(requests)
+        handler = function_app.health.build().get_user_function()
+        response = handler(func.HttpRequest(
+            method="GET", url="/api/health", params={}, body=b""))
+        payload = json.loads(response.get_body())
+        assert response.status_code == 200 and payload["status"] == "ok"
+        assert payload["total"] == summary["records"]
+        expected_counts = {
+            key: sum(document["source"] == key for document in backend.documents.values())
+            for key in fixtures}
+        assert {dataset["key"]: dataset["count"] for dataset in payload["datasets"]} == expected_counts
+        for dataset in payload["datasets"]:
+            assert set(dataset) == {"key", "name", "classification", "count", "status", "updated_at"}
+            assert dataset["updated_at"] == max(
+                document["ingested_at"] for document in backend.documents.values()
+                if document["source"] == dataset["key"])
+            if dataset["key"] == "ihcc":
+                assert dataset["classification"] == "restricted"
+        health_requests = requests[health_start:]
+        assert len(health_requests) == len(fixtures)
+        for _, body in health_requests:
+            assert body["count"] is True and body["top"] == 1
+            assert body["select"] == "ingested_at"
+            assert body["filter"] in {f"source eq '{key}'" for key in fixtures}
         assert all("api-version=2024-07-01" in url for url, _ in requests)
     finally:
         sdk.close()

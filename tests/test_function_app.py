@@ -49,16 +49,17 @@ def test_search_happy_preserves_response(monkeypatch):
     assert payload["query"] == "childhood asthma" and payload["directory"] == "both"
     assert payload["results"][0]["url"]
     assert calls[0][0][0] == "childhood asthma"
-    assert calls[0][1] == {"enforce_security": False}
+    assert calls[0][1] == {"top": 8, "enforce_security": False}
 
 
 def test_post_source_filter_and_top_clamp(monkeypatch):
     calls = _mock_search(monkeypatch)
     HANDLERS["search_directories"](_req(
         "POST", body=json.dumps({"query": "asthma", "source": "ihcc", "top": 100}).encode()))
-    assert calls[0][0][2:] == ("ihcc", 25)
+    assert calls[0][0][1] == ["ihcc"]
+    assert calls[0][1]["top"] == 25
     HANDLERS["search_directories"](_req(params={"query": "asthma", "top": "-1"}))
-    assert calls[1][0][3] == 1
+    assert calls[1][1]["top"] == 1
 
 
 def test_search_backend_error_500(monkeypatch):
@@ -156,7 +157,7 @@ def test_entitled_keys_and_security_flag_reach_search(enforced, monkeypatch):
     calls = _mock_search(monkeypatch)
     HANDLERS["search_directories"](_req(params={"query": "asthma"}, headers=_principal(groups=["BASE"])))
     assert set(calls[0][0][1]) == {"publication", "project"}
-    assert calls[0][1] == {"enforce_security": True}
+    assert calls[0][1] == {"top": 8, "enforce_security": True}
     HANDLERS["search_directories"](_req(
         params={"query": "asthma"}, headers=_principal(groups=["BASE", "G-IHCC"])))
     assert set(calls[1][0][1]) == {"publication", "project", "ihcc"}

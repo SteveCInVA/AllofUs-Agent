@@ -65,7 +65,11 @@ connectivity.
 deterministic and offline.
 
 The Search smoke test in `test_storage.py` runs actual normalizers, refresh,
-upload/reimport, query, and health counts through the Azure Search SDK with an
+upload/reimport, query, and the anonymous health HTTP handler through the Azure Search SDK with an
 in-memory HTTP transport. No Azure service or credentials are required. Separate
 live deployment validation is still needed for RBAC, private networking, service
 limits, eventual consistency, and government-cloud behavior.
+Health checks verify per-source total match counts even when only one timestamp
+is retrieved, latest-ingestion selection, restricted-source metadata, empty
+sources, and HTTP 503 for missing Search counts. The HTTP response is checked
+to exclude document content and permission fields.

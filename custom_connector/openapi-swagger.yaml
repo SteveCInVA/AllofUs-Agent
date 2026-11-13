@@ -73,7 +73,9 @@ paths:
             Which source to search. 'publication' = All of Us published papers,
             'project' = All of Us Researcher Workbench projects, 'ihcc' = IHCC
             health cohorts, 'ccdi' = CCDI pediatric-cancer datasets, or 'all' to
-            search every source (default).
+            search every entitled source (default). These values filter the
+            shared Azure AI Search index's source field; they do not select
+            separate indexes.
         - name: top
           in: query
           required: false
