@@ -40,7 +40,8 @@ Invoke-Pester -Path .\tests\deploy_azure_infrastructure.Tests.ps1 -Output Detail
 
 These offline tests execute only the Search provisioning section with a fake
 Azure CLI. They cover commercial/government endpoint configuration, private
-networking, managed-identity roles, app settings, JSON index creation/read-back,
+networking, temporary public access with API keys disabled, the post-deployment
+disable warning/command, managed-identity roles, app settings, JSON index creation/read-back,
 deployer user/service-principal roles, bounded retries, and stopping on
 provisioning failures. They do not create Azure resources or verify live
 connectivity.
@@ -56,9 +57,15 @@ connectivity.
 | `test_sources_registry.py` | registry + cross-source required-keys contract |
 | `test_feeds.py` | `fetch` retry logic + `load_source_resilient` fallbacks |
 | `test_refresh_job.py` | per-source resilience, carry-forward, degraded status |
-| `test_function_app.py` | HTTP handlers + three-layer cache engine |
-| `test_storage.py` | connection/URL selection + blob ops (mocked) |
-| `test_smoke.py` | offline end-to-end + opt-in live smoke |
+| `test_function_app.py` | HTTP search/refresh contracts, entitlement forwarding, Search-backed health and failure responses |
+| `test_storage.py` | schema mapping, stable keys, size/count batching, source synchronization, security filters, real SDK HTTP serialization against an offline transport |
+| `test_smoke.py` | legacy offline BM25 reference pipeline + opt-in live source smoke |
 
 `fixtures/` holds tiny trimmed raw payloads per source so normalizer tests are
 deterministic and offline.
+
+The Search smoke test in `test_storage.py` runs actual normalizers, refresh,
+upload/reimport, query, and health counts through the Azure Search SDK with an
+in-memory HTTP transport. No Azure service or credentials are required. Separate
+live deployment validation is still needed for RBAC, private networking, service
+limits, eventual consistency, and government-cloud behavior.

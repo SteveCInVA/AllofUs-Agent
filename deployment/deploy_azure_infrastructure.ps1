@@ -8,13 +8,14 @@
 #
 # Assumes an existing subscription and a caller with rights to create these objects
 # (including Entra Application Administrator / Cloud App Admin for the app
-# registrations, groups, and role), plus private VNet connectivity to Search.
+# registrations, groups, and role). Search public access is enabled for deployment;
+# disable it afterward and use the provisioned private endpoint for runtime access.
 
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo13"
-$sfx = "aou1113"
+$rg  = "rg-allofus-demo01"
+$sfx = "aou01"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"
@@ -25,6 +26,7 @@ $searchPartitionCount = 1
 $searchSemanticSearch = "free"
 $searchIndexFile = Join-Path (Split-Path $PSScriptRoot -Parent) "index.json"
 $searchApiVersion = "2024-07-01"
+$searchDisablePublicAccessCommand = "az search service update --resource-group $rg --name $searchSvcName --public-network-access disabled"
 $vnetName = "vnet-allofus"
 $vnetAddressSpace = "192.168.0.0/24"
 $funcSubnetName = "pe-functions"
@@ -285,15 +287,16 @@ foreach ($service in @("queue", "table")) {
 }
 
 # ============================================================ 5a. Azure AI Search
-Write-Output "Creating private Azure AI Search service '$searchSvcName'..."
+Write-Output "Creating Azure AI Search service '$searchSvcName' with temporary public network access..."
 if ([string]::IsNullOrWhiteSpace($sami)) {
   throw "The Function managed identity is missing; cannot configure Azure AI Search access."
 }
+Write-Warning "Deployment enables Search public network access. Disable it after deployment, including if deployment fails: $searchDisablePublicAccessCommand"
 $searchId = az search service create `
   --resource-group $rg --name $searchSvcName --location $loc `
   --sku $searchSku --replica-count $searchReplicaCount --partition-count $searchPartitionCount `
   --semantic-search $searchSemanticSearch --disable-local-auth true `
-  --public-network-access disabled --query id -o tsv
+  --public-network-access enabled --query id -o tsv
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($searchId)) {
   throw "Failed to create Azure AI Search service '$searchSvcName'."
 }
@@ -339,10 +342,11 @@ if ($LASTEXITCODE -ne 0) {
   throw "Failed to associate the Azure AI Search private endpoint with its DNS zone."
 }
 
-# These settings prepare the runtime for migration; current retrieval still uses Blob/BM25.
+# Search is the corpus store for refresh, search, and health.
 $searchEndpoint = "https://$searchSvcName.$searchHostSuffix"
 az functionapp config appsettings set --resource-group $rg --name $functionSvcName `
-  --settings "AZURE_SEARCH_ENDPOINT=$searchEndpoint" "AZURE_SEARCH_AUDIENCE=$searchAudience" -o none
+  --settings "AZURE_SEARCH_ENDPOINT=$searchEndpoint" "AZURE_SEARCH_AUDIENCE=$searchAudience" `
+    "AZURE_SEARCH_INDEX_NAME=$searchIndexName" -o none
 if ($LASTEXITCODE -ne 0) {
   throw "Failed to configure Azure AI Search settings on Function '$functionSvcName'."
 }
@@ -387,12 +391,12 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   }
   Write-Warning "Search index request failed: $($indexResult -join [Environment]::NewLine)"
   if ($attempt -lt 20) {
-    Write-Output "Waiting 30s for Search RBAC, private DNS, or service readiness..."
+    Write-Output "Waiting 30s for Search RBAC, DNS, or service readiness..."
     Start-Sleep -Seconds 30
   }
 }
 if (-not $searchIndexCreated) {
-  throw "Failed to create Search index '$searchIndexName'. Run from a host connected to the private VNet; verify private DNS, Search RBAC propagation, and the index definition. Public access and API keys remain disabled."
+  throw "Failed to create Search index '$searchIndexName'. Verify network access, DNS, Search RBAC propagation, and the index definition. Public network access remains enabled for deployment; API keys remain disabled. Disable public access after troubleshooting: $searchDisablePublicAccessCommand"
 }
 $verifiedIndexName = az rest --method get --uri $searchIndexUri --resource $searchAudience --query name -o tsv
 if ($LASTEXITCODE -ne 0 -or $verifiedIndexName -ne $searchIndexName) {
@@ -529,7 +533,7 @@ foreach ($origin in $portalOrigins) {
 Write-Output ""
 Write-Output "Deployment complete."
 Write-Output "  Function:     https://$functionSvcName.$functionHostSuffix"
-Write-Output "  AI Search:    $searchEndpoint (private, managed identity only)"
+Write-Output "  AI Search:    $searchEndpoint (public access enabled for deployment; Entra authentication only)"
 Write-Output "  Search index: $searchIndexName"
 Write-Output "  API appId:    $apiApp"
 if ($kvSecretStored) {
@@ -541,9 +545,13 @@ if ($kvSecretStored) {
 Write-Output "  Base group:   $baseGroup (AoU-Agent-Users)"
 Write-Output "  IHCC group:   $ihccGroup (AoU-DS-IHCC)"
 Write-Output "  CCDI group:   $ccdiGroup (AoU-DS-CCDI)"
+Write-Warning "ACTION REQUIRED: Azure AI Search public network access is still enabled. Disable it after deployment is complete."
+Write-Output "  $searchDisablePublicAccessCommand"
+Write-Output "  After disabling public access, verify Function search/health through the private endpoint."
 
 ##################################
 # NEXT STEPS
+#  Disable Search public access after deployment: run $searchDisablePublicAccessCommand.
 #  1. Publish the code:   cd /code ; func azure functionapp publish $functionSvcName --build remote
 #  2. Assign users to AoU-Agent-Users (base) + AoU-DS-IHCC / AoU-DS-CCDI as needed,
 #     and grant the $adminRole app role to admins (for POST /api/refresh).

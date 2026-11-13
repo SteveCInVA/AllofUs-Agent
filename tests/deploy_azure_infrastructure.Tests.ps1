@@ -13,6 +13,8 @@ Describe "Azure AI Search infrastructure (offline)" {
     $searchSetup = [scriptblock]::Create($deploymentSource.Substring($searchStart, $searchEnd - $searchStart))
     $indexEnd = $deploymentSource.IndexOf('write-output "Setting up Key Vault')
     $indexSetup = [scriptblock]::Create($deploymentSource.Substring($searchEnd, $indexEnd - $searchEnd))
+    $summaryStart = $deploymentSource.IndexOf("# ============================================================ Summary")
+    $summarySetup = [scriptblock]::Create($deploymentSource.Substring($summaryStart))
 
     function az {
       $script:commands.Add(@($args))
@@ -53,7 +55,7 @@ Describe "Azure AI Search infrastructure (offline)" {
     $script:searchResourceId = "/subscriptions/test/resourceGroups/test/providers/Microsoft.Search/searchServices/test"
   }
 
-  It "configures private identity-only Search in <Cloud>" -TestCases @(
+  It "allows temporary public Search access with Entra auth and private endpoints in <Cloud>" -TestCases @(
     @{ Cloud = "AzureCloud"; Suffix = "search.windows.net"; Audience = "https://search.azure.com" },
     @{ Cloud = "AzureUSGovernment"; Suffix = "search.azure.us"; Audience = "https://search.azure.us" }
   ) {
@@ -63,7 +65,7 @@ Describe "Azure AI Search infrastructure (offline)" {
 
     $create = $script:commands[0] -join " "
     $create | Should -Match "--sku basic --replica-count 1 --partition-count 1"
-    $create | Should -Match "--semantic-search free --disable-local-auth true --public-network-access disabled"
+    $create | Should -Match "--semantic-search free --disable-local-auth true --public-network-access enabled"
     foreach ($role in @("Search Index Data Reader", "Search Index Data Contributor", "Search Service Contributor")) {
       $assignment = @($script:commands | Where-Object { $_ -contains $role })
       $assignment.Count | Should -Be 1
@@ -83,6 +85,7 @@ Describe "Azure AI Search infrastructure (offline)" {
     $settings = $script:commands[$script:commands.Count - 1]
     ($settings -contains "AZURE_SEARCH_ENDPOINT=https://$searchSvcName.$Suffix") | Should -Be $true
     ($settings -contains "AZURE_SEARCH_AUDIENCE=$Audience") | Should -Be $true
+    ($settings -contains "AZURE_SEARCH_INDEX_NAME=allofus-content") | Should -Be $true
   }
 
   It "stops immediately when Search operation <Operation> fails" -TestCases @(
@@ -147,7 +150,7 @@ Describe "Azure AI Search infrastructure (offline)" {
     . ([scriptblock]::Create($configuration))
     . $searchSetup
     $script:putFailures = 20
-    { . $indexSetup } | Should -Throw "*host connected to the private VNet*"
+    { . $indexSetup } | Should -Throw "*Disable public access after troubleshooting*"
     @($script:commands | Where-Object { ($_[0..2] -join " ") -eq "rest --method put" }).Count | Should -Be 20
     @($script:commands | Where-Object { ($_[0..2] -join " ") -eq "rest --method get" }).Count | Should -Be 0
     Should -Invoke Start-Sleep -Times 19 -Exactly
@@ -178,6 +181,23 @@ Describe "Azure AI Search infrastructure (offline)" {
       ('$searchIndexFile = "' + $missingPath + '"')
     )
     { . ([scriptblock]::Create($invalidConfiguration)) } | Should -Throw "*Search index definition not found*"
+    $script:commands.Count | Should -Be 0
+  }
+
+  It "warns the operator and prints the disable command after deployment in <Cloud>" -TestCases @(
+    @{ Cloud = "AzureCloud" },
+    @{ Cloud = "AzureUSGovernment" }
+  ) {
+    param($Cloud)
+    . ([scriptblock]::Create($configuration.Replace('$cloud = "AzureCloud"', ('$cloud = "' + $Cloud + '"'))))
+    $kvSecretStored = $true
+    Mock Write-Warning {}
+    $output = @(. $summarySetup)
+    Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter {
+      $Message -like "*public network access is still enabled*Disable it after deployment*"
+    }
+    ($output -join "`n") | Should -Match ([regex]::Escape(
+      "az search service update --resource-group $rg --name $searchSvcName --public-network-access disabled"))
     $script:commands.Count | Should -Be 0
   }
 }

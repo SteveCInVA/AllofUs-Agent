@@ -19,7 +19,9 @@ def norm_publications(rows):
         for a in (r.get("calc_author_list") or []):
             if isinstance(a, dict):
                 names.append(f"{a.get('ForeName','')} {a.get('LastName','')}".strip())
-        insts = clean(r.get("calc_institution_list", "")).replace("|", ", ")
+        institution_names = [clean(name) for name in (r.get("calc_institution_list") or "").split("|")
+                             if clean(name)]
+        insts = ", ".join(institution_names)
         y = r.get("calc_date_year", "")
         m = str(r.get("calc_date_month", "")).zfill(2)
         d = str(r.get("calc_date_day", "")).zfill(2)
@@ -40,10 +42,11 @@ def norm_publications(rows):
             "title": title,
             "authors": names[:6],
             "institutions": insts,
+            "_institutions": institution_names,
             "date": date,
             "journal": clean(r.get("calc_journal_title", "")),
             "focus": focus,
-            "citations": str(r.get("icite_count", "")),
+            "citations": str(r.get("icite_count") if r.get("icite_count") is not None else ""),
             "url": r.get("link", ""),
             "snippet": trim(abstract or lay),
             "_body": " ".join([title, abstract, lay, " ".join(names),
@@ -76,6 +79,7 @@ def norm_projects(rows):
             "title": title,
             "authors": people[:6],
             "institutions": ", ".join(sorted(insts)),
+            "_institutions": sorted(insts),
             "focus": focus,
             "access_tier": r.get("accessTier", ""),
             "url": r.get("reviewUrl", ""),

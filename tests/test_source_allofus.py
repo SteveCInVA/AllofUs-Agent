@@ -10,6 +10,7 @@ def test_publications_skips_hidden_and_formats(publications_raw):
     assert d["source"] == "publication" and d["record_type"] == "Publication"
     assert d["authors"] == ["Jane Doe", "John Smith"]
     assert d["institutions"] == "Brown University, Rutgers"
+    assert d["_institutions"] == ["Brown University", "Rutgers"]
     assert d["date"] == "2022-10-19"
     assert d["focus"] == ["Common", "Population Health"]
     assert d["citations"] == "9"
@@ -28,6 +29,7 @@ def test_projects_flatten_team_and_snippet(projects_raw):
     assert d["authors"] == ["Nina Cesare", "Minhyuk Choi", "Xavier Test"]
     # institutions unique + sorted
     assert d["institutions"] == "Boston University, Rush University, UCSF"
+    assert d["_institutions"] == ["Boston University", "Rush University", "UCSF"]
     assert d["access_tier"] == "Controlled Tier"
     assert d["snippet"].startswith("Study population")
     assert "logistic regression" in d["_body"].lower()

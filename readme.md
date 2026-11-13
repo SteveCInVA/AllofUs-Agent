@@ -10,8 +10,8 @@ The agent searches four source families for work similar to a description the us
 
 > **As-built review (2026-11-07):** the [`docs/`](docs/architecture.md) references
 > describe the current implementation and its remaining gaps. In particular,
-> classification defaults are not fail-closed, HTTP refresh can exceed Azure's
-> response timeout, and health `status: ok` does not certify readiness. Review the
+> classification defaults are not fail-closed and HTTP refresh can exceed Azure's
+> response timeout. Health queries Search but does not certify upstream freshness. Review the
 > [deployment caveats](docs/multi-cloud-deployment.md#known-deployment-limitations)
 > before treating this runbook or script completion as deployment verification.
 
@@ -30,7 +30,7 @@ The deployment code assumes:
 - Active Azure Subscription
 - Access to the AzureCLI
 - Permissions to a subscription that may create a resource group and required objects.
-- **Azure Functions Core Tools (`func`)** and **Python 3.12** installed locally (for code publish / optional local index build).
+- **Azure Functions Core Tools (`func`)** and **Python 3.12** installed locally (for code publish / optional command-line Search import).
 - **Entra directory permissions** to create app registrations, security groups, and app-role assignments — **Application Administrator + Groups Administrator**, or **Global Administrator**.
 - For GCC: a matching **GCC Power Platform** environment, and substitute the government endpoints where noted (`graph.microsoft.us`, `portal.azure.us`, `.azurewebsites.us`).
 
@@ -138,24 +138,36 @@ Deployment will perform the following:
     - table
 - Update Azure Function to use system assigned managed identity to access storage account
 - Create Azure AI Search (Basic, one replica/partition, free semantic ranker allowance)
-    - Disable public network access and API-key authentication
+    - Enable public network access temporarily for deployment; keep API-key authentication disabled
     - Create a private endpoint in the existing private-endpoint subnet, private DNS zone, and VNet link
     - Grant the Function identity Search Index Data Reader, Search Index Data Contributor, and Search Service Contributor
-    - Set `AZURE_SEARCH_ENDPOINT` and cloud-specific `AZURE_SEARCH_AUDIENCE`
+    - Set `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_INDEX_NAME`, and cloud-specific `AZURE_SEARCH_AUDIENCE`
     - Grant the Azure CLI deployer Search Service Contributor, create/update the index from `index.json`, and verify it with a read-back request
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
 
-Search provisioning creates the empty index defined in `index.json`; current
-application retrieval remains Blob-backed BM25. No documents, embeddings, or Azure
-OpenAI resources are loaded or created by the Search step. Basic capacity and Private Link incur charges; the free semantic ranker
+Search provisioning creates the empty index defined in `index.json`. Application
+refresh imports documents into that index, and search/health query it directly.
+No documents, embeddings, or Azure OpenAI resources are loaded or created by the
+infrastructure step. Basic capacity and Private Link incur charges; the free semantic ranker
 allowance does not make the service free. Review region/cloud availability before
 deployment. Search data-plane administration requires a host with private VNet
 connectivity and appropriate Search RBAC; allow time for role propagation.
-Run the deployment script from a host with private VNet connectivity, since index
-creation uses the private Search data endpoint. The script retries failed index
+Public Search network access is enabled during deployment so index creation can
+run without private VNet connectivity. Entra authentication and Search RBAC are
+still required; API keys remain disabled. The script retries failed index
 requests up to 20 times, waiting 30 seconds between attempts for RBAC, DNS, or
 service readiness, then fails explicitly if creation or read-back verification
-fails. It never enables public Search access or API keys. Existing compatible
+fails. **Public access remains enabled until you disable it manually**, even if
+deployment fails. The script prints a warning and the command:
+
+```powershell
+az search service update --resource-group $rg --name $searchSvcName --public-network-access disabled
+```
+
+Run this after deployment is complete (or after troubleshooting a failure), then
+verify Function search/health using the provisioned private endpoint and DNS.
+Subsequent direct Search administration/import requires private connectivity.
+Existing compatible
 indexes are updated without deleting documents; incompatible schema changes fail
 and require a separately planned migration.
 
@@ -224,11 +236,11 @@ cd /code
 func azure functionapp publish $functionSvcName --build remote
 ```
 
-> Deployed packages intentionally ship **no** search indexes — not even public ones — so
-> restricted data can never be packaged. The app loads every dataset from Blob Storage on
-> the first refresh (step 7). Running `python build_index.py --public` only populates a
-> **local** `code/index/` for offline development; that folder is excluded from the
-> deployment package.
+> Deployed packages intentionally ship **no** corpus data. The first refresh
+> imports source records directly into Azure AI Search, without normalized-data
+> cache blobs, pickle files, or a manifest blob. `python build_index.py --public`
+> now imports public datasets into Search too; it does not create local indexes.
+> See [Search import and refresh](docs/search-index.md#import-and-refresh).
 
 When the publish completes you'll see the deployed functions and their URLs. **The app
 has no searchable data yet** — you load it in step 7 below. First assign entitlements
@@ -270,7 +282,7 @@ Remove-Item $bodyFile.FullName -Force
 
 #### Get a new token 
 
-The deploying user needs to have their token refreshed to ensure they are able to populate the cache and query datasets
+The deploying user needs a fresh token to import data and query datasets.
 
 ````powershell
 az logout
@@ -280,7 +292,7 @@ az login
 
 #### Load data (first refresh)
 
-Deployed packages ship no index data, so populate Blob Storage by running one refresh (or
+Deployed packages ship no corpus data, so populate Azure AI Search by running one refresh (or
 wait for the daily **03:00 UTC** timer). `/api/refresh` requires the `Agent.Admin` role.
 
 ```powershell
@@ -295,8 +307,11 @@ $headers = @{ Authorization = "Bearer $token" }
 Invoke-RestMethod -Method Post -Uri "$uri/refresh" -Headers $headers | ConvertTo-Json -Depth 6
 ```
 
-A source that is temporarily unavailable keeps its previous index (never blanked), so a
-partial refresh won't wipe good data.
+A source fetch/normalization failure leaves its existing Search documents unchanged.
+Successful empty or partial source responses are authoritative and can remove old
+records. Uploads are acknowledged before stale IDs are deleted; an indexing failure
+returns HTTP 500 and can leave partially updated documents. Run only one refresh at
+a time. Search changes and counts are eventually consistent.
 
 #### Testing
 
@@ -313,9 +328,9 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 |$uri|"https://$app.azurewebsites.net/api"|Not needed unless operating in other than commercial Azure subscription|
 
 ### Testing functions
-- Health - anonymous; returns every dataset (including restricted ones) with its name, classification, and record count, read from the manifest (`index/manifest.json`)
-- Refresh - rebuilds each dataset's index and the manifest; a source that is temporarily unavailable keeps its previous index (never blanked). Requires the Admin role when `AUTH_ENFORCED=true`
-- Search - Executes a basic query and displays results (trimmed to the caller's entitled datasets when `AUTH_ENFORCED=true`)
+- Health - anonymous; queries Search for every enabled dataset's name, current classification, count, and latest indexed timestamp. Returns HTTP 503 when Search cannot be queried.
+- Refresh - imports each source directly into Search; failed fetches retain existing documents. Requires the Admin role when `AUTH_ENFORCED=true`.
+- Search - executes a full-text Search query filtered to the caller's entitled sources and matching indexed security fields when `AUTH_ENFORCED=true`.
 
 **Expected results after a successful first refresh**
 
@@ -331,8 +346,9 @@ The following parameters are defined in the /deployment/testing_azure_functions.
 | `/search` → `403` base group required | The token predates the group assignment (the script assigns the groups at deploy time). Get a fresh token; if it persists, verify the assignments (*Configure the Entra identity*). |
 | `/refresh` → `403` Admin role required | `Agent.Admin` not granted to the user (*Assign users & entitlements*) or a stale token. |
 | `/refresh` → `403` **but the role is assigned**; decoded token `roles` shows **GUIDs** and `groups` is empty | Check the API's group optional claims for `emit_as_roles` (must be off), verify role values and assignments, and acquire a fresh API token. Do not infer a stale service principal or recreate it from this symptom alone. Also inspect the response body: Easy Auth can return 403 before Python authorization runs. |
-| `/refresh` → `500` on IHCC/CCDI | Outbound egress to the three public data domains is blocked (see the GCC egress caveat above). |
+| `/refresh` reports `degraded` with `carried`/`failed` sources | Check outbound egress to the three public data domains and upstream availability (see the GCC egress caveat above). Existing indexed records are retained on fetch failures. |
 | `/health` → `401` | `/api/health` is not in Easy Auth **Excluded paths** (*Configure the Entra identity* step 2). |
+| `/health` → `503`, or Search calls fail | Verify `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_INDEX_NAME`, cloud audience/authority, index existence, Function Search RBAC, private DNS, and VNet connectivity. Blob contents are no longer a fallback. |
 
 ## Authentication & Authorization
 

@@ -97,9 +97,9 @@ the HTTP authorization header; Azure CLI can return cached tokens.
 
 | Endpoint | Rule when `AUTH_ENFORCED=true` |
 |---|---|
-| `GET/POST /api/search` | For a valid query, require a parsed principal (401 otherwise) and `BASE_ENTITLEMENT_GROUP_ID` in its groups (403 otherwise). Select public datasets plus restricted datasets mapped to held group IDs. Load/merge those indexes only. `count` is the number of returned matches. |
+| `GET/POST /api/search` | For a valid query, require a parsed principal (401 otherwise) and `BASE_ENTITLEMENT_GROUP_ID` in its groups (403 otherwise). Select public datasets plus restricted datasets mapped to held group IDs. Query Search with those source keys and matching indexed classification/group fields. `count` is the number of returned matches. |
 | `POST /api/refresh` | Require a parsed principal and the literal `ADMIN_ROLE` value in roles (default `Agent.Admin`); missing principal -> 401, missing role -> 403. No base or dataset group is required to rebuild all enabled datasets. |
-| `GET /api/health` | No claims check. Return the stored manifest, including restricted names/counts/statuses. Missing/unreadable manifest -> HTTP 200, `status: ok`, zero total and an empty dataset list. |
+| `GET /api/health` | No claims check. Query Search for all enabled sources, including restricted names/counts and latest indexed timestamps; empty sources are included. Search failure -> HTTP 503. |
 | `refresh_timer` | In-process daily trigger at 03:00 UTC; no HTTP identity required. |
 
 The code checks groups/roles, but does not separately enforce an OAuth `scp`
@@ -127,7 +127,9 @@ allowlist are part of the intended delegated path.
 `publication` and `project` are omitted and use the `Source` default `public`.
 Changing classification/group IDs requires an app-settings update and process
 restart, plus any necessary Entra assignments, **not a code redeploy**. A refresh
-updates the manifest's classification snapshot; health does not recompute it.
+updates indexed classification/group fields. Query filters require indexed values
+to match current configuration; stale values exclude records until reimport.
+Health reports current configured classification, not a stored snapshot.
 
 The script writes this setting using `--settings @<JSON-file>` to preserve nested
 quotes through Windows Azure CLI argument handling. Verify the persisted JSON
@@ -135,19 +137,22 @@ and that restricted entries contain the intended group object IDs.
 
 **Important implementation limitation:** absent configuration leaves all source
 defaults public; invalid JSON logs a warning and is ignored. Classification
-values, map shape, and group-ID uniqueness are not strictly validated. The
+values, map shape, and group-ID uniqueness are not strictly validated at
+configuration load. Search ingestion and query mapping do reject unknown
+classification values and restricted sources without a group. The
 claims checks fail closed for a missing base group or role, but classification
 configuration as a whole is **not fail-closed**. A restricted entry without a
 usable group cannot be entitled; an omitted restricted entry defaults public.
 
-`index_blob` is not a supported override in this JSON map.
-`Source.index_blob` has a default value, but runtime index helpers derive paths
-from `INDEX_PREFIX` instead. See [`architecture.md`](architecture.md).
+`index_blob` is not a supported override in this JSON map. The legacy
+`Source.index_blob` and `Source.cache_blob` fields are no longer used for corpus
+persistence. All sources share the configured Azure AI Search index. See
+[Search Index Structure](search-index.md).
 
 ## 7. Authorized search flow
 
-Exports: [PNG](diagrams/auth-search-flow.png) and
-[Mermaid source](diagrams/auth-search-flow.mmd).
+The following flow describes Search retrieval; older exports in `diagrams/`
+describe the historical Blob/BM25 implementation.
 
 ```mermaid
 flowchart TB
@@ -157,15 +162,18 @@ flowchart TB
     EA -- "validated principal" --> BASE{"Base group present?"}
     BASE -- "no" --> R403["Function 403"]
     BASE -- "yes" --> KEYS["Public plus group-entitled<br/>restricted dataset keys"]
-    KEYS --> LOAD["Load or reuse entitled indexes"]
-    LOAD --> BM["Merged BM25 scoring"]
+    KEYS --> LOAD["Build source plus indexed security filters"]
+    LOAD --> BM["Azure AI Search full-text scoring"]
     BM --> OUT["Filtered matches and returned count"]
 ```
 
-An unentitled request does not trigger loading its restricted index. An index
-loaded by an entitled user can remain in that worker's cache; the guarantee is
-request-specific engine selection, not purging all restricted bytes from memory.
-Refresh workers intentionally ingest all enabled sources.
+Unentitled sources are excluded in the server-generated Search filter, not
+filtered from a downloaded corpus afterward. For restricted sources the filter
+also checks the configured group against indexed `allowed_group_ids`; public
+sources require indexed `security_type: public`. There are no worker-local corpus
+or result caches. Refresh workers intentionally ingest all enabled sources.
+`AUTH_ENFORCED=false` retains the explicit development bypass of claims and
+indexed-permission checks.
 
 ## 8. Connector and operator setup
 
