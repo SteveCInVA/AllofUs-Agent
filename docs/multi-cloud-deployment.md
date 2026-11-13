@@ -20,6 +20,9 @@ These are the values selected by the script's `$cloud` variable:
 | Storage suffix | `core.windows.net` | `core.usgovcloudapi.net` |
 | Private DNS | `privatelink.{blob,queue,table}.core.windows.net` | `privatelink.{blob,queue,table}.core.usgovcloudapi.net` |
 | Function hostname suffix | `azurewebsites.net` | `azurewebsites.us` |
+| Search hostname suffix | `search.windows.net` | `search.azure.us` |
+| Search private DNS | `privatelink.search.windows.net` | `privatelink.search.azure.us` |
+| Search token audience | `https://search.azure.com` | `https://search.azure.us` |
 | Portal CORS origins | `portal.azure.com`, `ms.portal.azure.com` | `portal.azure.us` |
 | Entra authority | `login.microsoftonline.com` | `login.microsoftonline.us` |
 | Microsoft Graph | Derived from `az cloud show` (`graph.microsoft.com`) | Derived from `az cloud show` (`graph.microsoft.us`) |
@@ -43,7 +46,14 @@ examples as a discovered live deployment. The script:
 3. Creates the VNet/subnets, Standard LRS storage, and Python 3.12 Flex Consumption
    Function with VNet integration and system-assigned managed identity.
 4. Grants Blob/Queue/Table Data Contributor and provisions corresponding storage
-   private endpoints, DNS zones, and VNet links.
+   private endpoints, DNS zones, and VNet links. Also creates Basic Azure AI Search
+   (one replica/partition, free semantic ranker allowance) with public access and
+   API keys disabled, a private endpoint in the same private-endpoint subnet,
+   private DNS and VNet link. Grants the Function Search Index Data Reader,
+   Search Index Data Contributor, and Search Service Contributor; configures
+   `AZURE_SEARCH_ENDPOINT` and `AZURE_SEARCH_AUDIENCE`. Search provisioning errors
+   terminate the script. Existing retrieval is unchanged; indexes, embeddings,
+   and Azure OpenAI resources are not provisioned.
 5. Creates an RBAC Key Vault with public network access enabled, grants deployer
    Secrets Officer and Function Secrets User, and tries to store the connector
    secret after a 30s wait. Failed writes warn and print the secret; no vault
@@ -76,7 +86,13 @@ actions. Application Insights is explicitly disabled. See
 - **Network boundaries:** storage private endpoints do not disable its public
   endpoint or shared keys. Key Vault is explicitly public and has no private
   link. Customer policies may block these operations. A console-printed secret
-  does not resolve policy compliance or vault connectivity.
+  does not resolve policy compliance or vault connectivity. Search is private-only
+  from creation: data-plane administration/testing requires VNet connectivity
+  and Search RBAC. Validate private DNS and an authenticated Search request from
+  the Function network; script completion does not prove connectivity or RBAC
+  propagation. Check Search/semantic ranker availability in the selected region.
+  Basic capacity and Private Link are billable; one replica is development
+  capacity, not a production availability configuration.
 - **Hosting availability:** the script always requests Flex Consumption. There
   is no automatic Premium/other-plan fallback; verify service and Python runtime
   support in the target region/cloud before deploying.

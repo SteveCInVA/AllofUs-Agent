@@ -29,6 +29,20 @@ pytest -m live -k ihcc         # a single reliable source
 pytest -m "live and not slow"  # skip the slow CCDI federation call
 ```
 
+### Search infrastructure (PowerShell)
+
+With Pester 5 installed, run from the repository root:
+
+```powershell
+Import-Module Pester -MinimumVersion 5.0
+Invoke-Pester -Path .\tests\deploy_azure_infrastructure.Tests.ps1 -Output Detailed
+```
+
+These offline tests execute only the Search provisioning section with a fake
+Azure CLI. They cover commercial/government endpoint configuration, private
+networking, managed-identity roles, app settings, and stopping on provisioning
+failures. They do not create Azure resources or verify live connectivity.
+
 ## Layout
 
 | File | Covers |

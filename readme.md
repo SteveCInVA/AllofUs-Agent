@@ -96,6 +96,11 @@ The following variables are defined at the top of the `deploy_azure_infrastructu
 |$sfx|"aou1234"|Suffix to apply to resources|
 |$storageAcctName|"staallofus$sfx"|Resource name of storage account (includes suffix)|
 |$functionSvcName|"func-allofus-$sfx"|Resource name of Azure Function (includes suffix)|
+|$searchSvcName|"srch-allofus-$sfx"|Globally unique Azure AI Search service name|
+|$searchSku|"basic"|Search tier (billable development capacity)|
+|$searchReplicaCount|1|Search replicas; review availability/SLA requirements for production|
+|$searchPartitionCount|1|Search partitions|
+|$searchSemanticSearch|"free"|Semantic ranker free request allowance; not the free Search service tier|
 |$vnetName|"vnet-allofus"|Resource name of vNet|
 |$vnetAddressSpace|"192.168.0.0/24"|CIDR of vNet|
 |$funcSubnetName|"pe-functions"|Subnet name used for Azure Function|
@@ -132,7 +137,21 @@ Deployment will perform the following:
     - queue
     - table
 - Update Azure Function to use system assigned managed identity to access storage account
+- Create Azure AI Search (Basic, one replica/partition, free semantic ranker allowance)
+    - Disable public network access and API-key authentication
+    - Create a private endpoint in the existing private-endpoint subnet, private DNS zone, and VNet link
+    - Grant the Function identity Search Index Data Reader, Search Index Data Contributor, and Search Service Contributor
+    - Set `AZURE_SEARCH_ENDPOINT` and cloud-specific `AZURE_SEARCH_AUDIENCE`
 - Enable CORS to allow testing from https://portal.azure.com and https://ms.portal.azure.com
+
+Search provisioning is infrastructure-only: current application retrieval remains
+Blob-backed BM25. No Search indexes, embeddings, or Azure OpenAI resources are
+created. Basic capacity and Private Link incur charges; the free semantic ranker
+allowance does not make the service free. Review region/cloud availability before
+deployment. Search data-plane administration requires a host with private VNet
+connectivity and appropriate Search RBAC; allow time for role propagation.
+Validate private DNS resolution and an authenticated Search request from that
+network before treating Search as ready.
 
 #### Configure the Entra identity (verify + authorize the connector)
 

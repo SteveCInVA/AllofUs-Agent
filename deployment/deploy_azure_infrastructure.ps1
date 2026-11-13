@@ -2,7 +2,7 @@
 #
 # Stands up the whole solution from scratch in one run: resource group, Entra app
 # registrations + groups + admin role, VNet + private endpoints, storage, Function
-# App (system-assigned managed identity), Key Vault, role assignments, Easy Auth,
+# App (system-assigned managed identity), Azure AI Search, Key Vault, role assignments, Easy Auth,
 # and all app settings (including entitlement-based authorization, enforced from
 # day one). After this runs, publish the code and assign users to the groups.
 #
@@ -13,11 +13,16 @@
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo23"
-$sfx = "aou0923"
+$rg  = "rg-allofus-demo13"
+$sfx = "aou1113"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"
+$searchSvcName = "srch-allofus-$sfx"
+$searchSku = "basic"
+$searchReplicaCount = 1       # Development capacity; review replicas/SLA for production.
+$searchPartitionCount = 1
+$searchSemanticSearch = "free"
 $vnetName = "vnet-allofus"
 $vnetAddressSpace = "192.168.0.0/24"
 $funcSubnetName = "pe-functions"
@@ -35,6 +40,8 @@ switch ($cloud) {
     $endpointSuffix     = "core.usgovcloudapi.net"
     $privateLinkSuffix  = "core.usgovcloudapi.net"
     $functionHostSuffix = "azurewebsites.us"
+    $searchHostSuffix   = "search.azure.us"
+    $searchAudience     = "https://search.azure.us"
     $authorityHost      = "https://login.microsoftonline.us"
     $portalOrigins      = @("https://portal.azure.us")
   }
@@ -43,6 +50,8 @@ switch ($cloud) {
     $endpointSuffix     = "core.windows.net"
     $privateLinkSuffix  = "core.windows.net"
     $functionHostSuffix = "azurewebsites.net"
+    $searchHostSuffix   = "search.windows.net"
+    $searchAudience     = "https://search.azure.com"
     $authorityHost      = "https://login.microsoftonline.com"
     $portalOrigins      = @("https://portal.azure.com", "https://ms.portal.azure.com")
   }
@@ -264,6 +273,69 @@ foreach ($service in @("queue", "table")) {
         --name "storage-dns" --private-dns-zone "privatelink.$service.$privateLinkSuffix" --zone-name $service
 }
 
+# ============================================================ 5a. Azure AI Search
+Write-Output "Creating private Azure AI Search service '$searchSvcName'..."
+if ([string]::IsNullOrWhiteSpace($sami)) {
+  throw "The Function managed identity is missing; cannot configure Azure AI Search access."
+}
+$searchId = az search service create `
+  --resource-group $rg --name $searchSvcName --location $loc `
+  --sku $searchSku --replica-count $searchReplicaCount --partition-count $searchPartitionCount `
+  --semantic-search $searchSemanticSearch --disable-local-auth true `
+  --public-network-access disabled --query id -o tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($searchId)) {
+  throw "Failed to create Azure AI Search service '$searchSvcName'."
+}
+
+# Query and refresh share one Function identity, including document and index management.
+foreach ($role in @("Search Index Data Reader", "Search Index Data Contributor", "Search Service Contributor")) {
+  az role assignment create --assignee-object-id $sami --assignee-principal-type ServicePrincipal `
+    --role $role --scope $searchId -o none
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to assign '$role' on Azure AI Search service '$searchSvcName'."
+  }
+}
+
+$searchDnsZone = "privatelink.$searchHostSuffix"
+az network vnet subnet update `
+  --resource-group $rg --vnet-name $vnetName --name $peSubnetStorage `
+  --disable-private-endpoint-network-policies true -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to configure the private endpoint subnet for Azure AI Search."
+}
+az network private-dns zone create --resource-group $rg --name $searchDnsZone -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to create Azure AI Search private DNS zone '$searchDnsZone'."
+}
+az network private-dns link vnet create `
+  --resource-group $rg --zone-name $searchDnsZone --name "link-search" `
+  --virtual-network $vnetName --registration-enabled false -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to link Azure AI Search private DNS to '$vnetName'."
+}
+az network private-endpoint create `
+  --resource-group $rg --name "pe-$searchSvcName" `
+  --vnet-name $vnetName --subnet $peSubnetStorage `
+  --private-connection-resource-id $searchId --group-id searchService `
+  --connection-name "pl-$searchSvcName" -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to create the Azure AI Search private endpoint."
+}
+az network private-endpoint dns-zone-group create `
+  --resource-group $rg --endpoint-name "pe-$searchSvcName" `
+  --name "search-dns" --private-dns-zone $searchDnsZone --zone-name searchService -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to associate the Azure AI Search private endpoint with its DNS zone."
+}
+
+# These settings prepare the runtime for migration; current retrieval still uses Blob/BM25.
+$searchEndpoint = "https://$searchSvcName.$searchHostSuffix"
+az functionapp config appsettings set --resource-group $rg --name $functionSvcName `
+  --settings "AZURE_SEARCH_ENDPOINT=$searchEndpoint" "AZURE_SEARCH_AUDIENCE=$searchAudience" -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to configure Azure AI Search settings on Function '$functionSvcName'."
+}
+
 write-output "Setting up Key Vault '$kvName' and storing connector secret..."
 # ============================================================ 6. Key Vault (connector secret)
 # NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets - being
@@ -393,6 +465,7 @@ foreach ($origin in $portalOrigins) {
 Write-Output ""
 Write-Output "Deployment complete."
 Write-Output "  Function:     https://$functionSvcName.$functionHostSuffix"
+Write-Output "  AI Search:    $searchEndpoint (private, managed identity only)"
 Write-Output "  API appId:    $apiApp"
 if ($kvSecretStored) {
   Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
