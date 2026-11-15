@@ -14,8 +14,8 @@
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo01"
-$sfx = "aou01"
+$rg  = "rg-allofus-demo02"
+$sfx = "aou02"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"

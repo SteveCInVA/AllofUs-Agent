@@ -138,6 +138,20 @@ def test_real_source_records_match_every_index_field(request, key, fixture):
         assert storage._record_id(document["id"]) == record["id"]
 
 
+@pytest.mark.parametrize("access_tier,expected", [
+    (False, ""),
+    (None, None),
+    ("Registered Tier", "Registered Tier"),
+    ("Controlled Tier", "Controlled Tier"),
+])
+def test_project_access_tier_maps_to_search(projects_raw, access_tier, expected):
+    projects_raw[0]["accessTier"] = access_tier
+    source = sources.get_source("project")
+    record = source.normalize(projects_raw)[0]
+    document = storage.search_document(source, record, "2026-11-13T20:00:00Z")
+    assert document["access_tier"] == expected
+
+
 def test_mapping_preserves_institution_boundaries_and_partial_dates():
     record = _record(
         institutions="University, School of Medicine, Other University",

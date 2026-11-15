@@ -5,7 +5,7 @@
 ##################################
 
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$sfx = "aou0923"
+$sfx = "aou02"
 $app = "func-allofus-$sfx"
 $apiAppId = "<API-APP-ID>"     # AllOfUs-Function-API appId from the deployment output
 

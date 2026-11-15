@@ -240,6 +240,10 @@ date.
 
 ## Security filtering
 
+The All of Us project feed can return `accessTier: false` for an unavailable
+tier. The project normalizer maps that sentinel to an empty `access_tier`
+string before Search schema validation; valid tier names remain unchanged.
+
 `security_type` describes application visibility, not access to underlying
 research data. A project's `access_tier` must not determine who can see its
 metadata.

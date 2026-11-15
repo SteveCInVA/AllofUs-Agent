@@ -72,6 +72,9 @@ def norm_projects(rows):
         questions = clean(r.get("questions", ""))
         approaches = clean(r.get("approaches", ""))
         findings = clean(r.get("findings", ""))
+        access_tier = r.get("accessTier", "")
+        if access_tier is False:
+            access_tier = ""
         out.append({
             "id": f"proj-{r.get('workspaceId')}",
             "source": "project",
@@ -81,7 +84,7 @@ def norm_projects(rows):
             "institutions": ", ".join(sorted(insts)),
             "_institutions": sorted(insts),
             "focus": focus,
-            "access_tier": r.get("accessTier", ""),
+            "access_tier": access_tier,
             "url": r.get("reviewUrl", ""),
             "snippet": trim(questions or approaches or findings),
             "_body": " ".join([title, " ".join(purposes), questions,
