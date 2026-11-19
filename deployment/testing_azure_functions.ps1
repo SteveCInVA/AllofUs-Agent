@@ -104,3 +104,19 @@ $response = Invoke-RestMethod `
 
 $response | ConvertTo-Json -Depth 10
 clear-variable -Name response
+
+##########################################
+
+$search_uri = "$uri/search"
+
+$query = [System.Uri]::EscapeDataString(
+    "Genomic Data"
+)
+
+$response = Invoke-RestMethod `
+    -Method Get `
+    -Uri "$search_uri`?query=$query&directory=all&top=5" `
+    -Headers $headers
+
+$response | ConvertTo-Json -Depth 10
+clear-variable -Name response
