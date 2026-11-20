@@ -20,6 +20,9 @@ These are the values selected by the script's `$cloud` variable:
 | Storage suffix | `core.windows.net` | `core.usgovcloudapi.net` |
 | Private DNS | `privatelink.{blob,queue,table}.core.windows.net` | `privatelink.{blob,queue,table}.core.usgovcloudapi.net` |
 | Function hostname suffix | `azurewebsites.net` | `azurewebsites.us` |
+| Search hostname suffix | `search.windows.net` | `search.azure.us` |
+| Search private DNS | `privatelink.search.windows.net` | `privatelink.search.azure.us` |
+| Search token audience | `https://search.azure.com` | `https://search.azure.us` |
 | Portal CORS origins | `portal.azure.com`, `ms.portal.azure.com` | `portal.azure.us` |
 | Entra authority | `login.microsoftonline.com` | `login.microsoftonline.us` |
 | Microsoft Graph | Derived from `az cloud show` (`graph.microsoft.com`) | Derived from `az cloud show` (`graph.microsoft.us`) |
@@ -43,7 +46,23 @@ examples as a discovered live deployment. The script:
 3. Creates the VNet/subnets, Standard LRS storage, and Python 3.12 Flex Consumption
    Function with VNet integration and system-assigned managed identity.
 4. Grants Blob/Queue/Table Data Contributor and provisions corresponding storage
-   private endpoints, DNS zones, and VNet links.
+   private endpoints, DNS zones, and VNet links. Also creates Basic Azure AI Search
+   (one replica/partition, free semantic ranker allowance) with public access
+   temporarily enabled for deployment and API keys disabled, a private endpoint in the same private-endpoint subnet,
+   private DNS and VNet link. Grants the Function Search Index Data Reader,
+   Search Index Data Contributor, and Search Service Contributor; configures
+   `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_INDEX_NAME`, and `AZURE_SEARCH_AUDIENCE`. Search provisioning errors
+   terminate the script. Grants the Azure CLI deployer Search Service Contributor,
+   creates or updates the empty index from [index.json](../index.json), and verifies
+   it by reading it back. Index creation can use the public endpoint; index writes
+   retry up to 20 times with 30-second waits for RBAC/DNS/service readiness.
+   Application refresh loads documents afterward; the infrastructure step does
+   not load documents or provision embeddings or Azure OpenAI resources.
+   See [Search Index Structure](search-index.md).
+   **Disable Search public network access after deployment completes**, or after
+   troubleshooting a failure, using the command printed by the script. It does
+   not disable public access automatically. Verify Function access through the
+   private endpoint afterward.
 5. Creates an RBAC Key Vault with public network access enabled, grants deployer
    Secrets Officer and Function Secrets User, and tries to store the connector
    secret after a 30s wait. Failed writes warn and print the secret; no vault
@@ -76,7 +95,13 @@ actions. Application Insights is explicitly disabled. See
 - **Network boundaries:** storage private endpoints do not disable its public
   endpoint or shared keys. Key Vault is explicitly public and has no private
   link. Customer policies may block these operations. A console-printed secret
-  does not resolve policy compliance or vault connectivity.
+  does not resolve policy compliance or vault connectivity. Search is private-only
+  from creation: data-plane administration/testing requires VNet connectivity
+  and Search RBAC. Validate private DNS and an authenticated Search request from
+  the Function network; script completion does not prove connectivity or RBAC
+  propagation. Check Search/semantic ranker availability in the selected region.
+  Basic capacity and Private Link are billable; one replica is development
+  capacity, not a production availability configuration.
 - **Hosting availability:** the script always requests Flex Consumption. There
   is no automatic Premium/other-plan fallback; verify service and Python runtime
   support in the target region/cloud before deploying.
@@ -93,17 +118,21 @@ Do not paste deployment secret output into logs or tickets.
 
 ## Runtime storage
 
-`code/storage.py` prefers a configured `CORPUS_STORAGE` or
-`AzureWebJobsStorage` connection string. Without one, `_account_url()` uses
-`CORPUS_STORAGE__blobServiceUri` or `AzureWebJobsStorage__blobServiceUri`, falling
-back to account name plus `STORAGE_ENDPOINT_SUFFIX` (default
-`core.windows.net`). It then uses `DefaultAzureCredential`; the deploy supplies
-`AZURE_AUTHORITY_HOST` and managed-identity storage settings.
+`code/storage.py` persists corpus documents in Azure AI Search using
+`DefaultAzureCredential`. Deployment supplies `AZURE_SEARCH_ENDPOINT`,
+`AZURE_SEARCH_INDEX_NAME`, `AZURE_SEARCH_AUDIENCE`, and `AZURE_AUTHORITY_HOST`.
+Government uses `https://search.azure.us` as the token audience. The Function
+identity has Search document read/write permissions; private DNS and VNet
+connectivity are required. No corpus connection strings or API keys are used.
+The Functions host still uses managed-identity storage settings for its own
+runtime/timer infrastructure.
 
 Python Functions consumes local settings via Core Tools; running an ordinary
 Python script does not automatically load `local.settings.json`.
-`build_index.py` is a local-development utility. `code/.funcignore` excludes all
-indexes, so **every fresh deployment starts without searchable data**.
+`build_index.py` now imports directly into Search using the same refresh process;
+`--public` selects currently public sources. It requires Search document data
+roles, private connectivity, and explicit environment variables. A freshly created
+index is empty until import; no packaged pickle or legacy Blob fallback exists.
 
 ## Connector and validation
 
@@ -126,10 +155,10 @@ After every deployment, verify:
 2. Anonymous health and fresh-token authorization: no base group -> search 403;
    base only -> public results; each restricted group -> only its compartment;
    both groups -> both; non-admin refresh -> 403.
-3. Refresh execution and manifest per-source counts/statuses. Health `status: ok`
-   is not proof of a successful refresh; absent/unreadable manifests currently
-   return an empty dataset list. After HTTP timeout, inspect logs and manifest
-   before triggering overlapping work.
+3. Refresh execution and Search per-source counts. Health `status: ok` confirms
+   a Search metadata query, not upstream freshness or a complete refresh;
+   Search failure returns 503. Index changes are eventually consistent. After
+   HTTP timeout, inspect logs before triggering overlapping work.
 4. Connector consent/callback setup and end-user delegated identity in the target
    Power Platform environment.
 

@@ -1,5 +1,5 @@
 azure-functions
-azure-storage-blob
+azure-search-documents
 azure-identity
 httpx[http2]
 rank_bm25

@@ -14,7 +14,7 @@
   It does NOT touch the Power Platform custom connector or the Copilot Studio agent -
   delete those by hand in the environment you built them in.
 
-  Set $cloud / $rg / $sfx below to match the deployment you are removing.
+  Set $cloud below and pass -rg / -sfx to match the deployment you are removing.
 
 .EXAMPLE
   .\cleanup_agent.ps1
@@ -29,6 +29,8 @@
   # remove only the Entra objects (leave the resource group in place).
 #>
 param(
+  [string]$resourceGroup = "rg-allofus-demo12", # resource group to remove
+  [string]$resourceSuffix = "aou1112",          # deployment resource-name suffix
   [switch]$Force,            # skip the interactive confirmation
   [switch]$SkipAzure,        # leave the Azure resource group in place
   [switch]$SkipEntra,        # leave the Entra apps / groups in place
@@ -42,8 +44,10 @@ $ErrorActionPreference = "Continue"
 # Config - MUST match the deployment you are tearing down
 # (mirror deploy_azure_infrastructure.ps1)
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg    = "rg-allofus-demo23"
-$sfx   = "aou0923"
+
+$rg = $resourceGroup
+$sfx = $resourceSuffix
+
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName          = "kv-allofus-$sfx"

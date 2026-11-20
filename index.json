@@ -1,0 +1,52 @@
+{
+  "name": "allofus-content",
+  "fields": [
+    { "name": "id", "type": "Edm.String", "key": true, "searchable": false, "filterable": true, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "security_type", "type": "Edm.String", "searchable": false, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "allowed_group_ids", "type": "Collection(Edm.String)", "searchable": false, "filterable": true, "facetable": false, "sortable": false, "retrievable": false },
+    { "name": "source", "type": "Edm.String", "searchable": false, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "record_type", "type": "Edm.String", "searchable": false, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "title", "type": "Edm.String", "searchable": true, "filterable": false, "facetable": false, "sortable": true, "retrievable": true },
+    { "name": "url", "type": "Edm.String", "searchable": false, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "snippet", "type": "Edm.String", "searchable": true, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "content", "type": "Edm.String", "searchable": true, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "authors", "type": "Collection(Edm.String)", "searchable": true, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "institutions", "type": "Collection(Edm.String)", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "focus", "type": "Collection(Edm.String)", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "ingested_at", "type": "Edm.DateTimeOffset", "searchable": false, "filterable": true, "facetable": false, "sortable": true, "retrievable": true },
+    { "name": "date", "type": "Edm.String", "searchable": false, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "publication_year", "type": "Edm.Int32", "searchable": false, "filterable": true, "facetable": true, "sortable": true, "retrievable": true },
+    { "name": "journal", "type": "Edm.String", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "citations", "type": "Edm.Int64", "searchable": false, "filterable": true, "facetable": false, "sortable": true, "retrievable": true },
+    { "name": "access_tier", "type": "Edm.String", "searchable": false, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "countries", "type": "Collection(Edm.String)", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "pi_lead", "type": "Edm.String", "searchable": true, "filterable": false, "facetable": false, "sortable": false, "retrievable": true },
+    { "name": "enrollment", "type": "Edm.Int64", "searchable": false, "filterable": true, "facetable": false, "sortable": true, "retrievable": true },
+    { "name": "diseases", "type": "Collection(Edm.String)", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "data_types", "type": "Collection(Edm.String)", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "organization", "type": "Edm.String", "searchable": true, "filterable": true, "facetable": true, "sortable": false, "retrievable": true },
+    { "name": "study_id", "type": "Edm.String", "searchable": true, "filterable": true, "facetable": false, "sortable": false, "retrievable": true }
+  ],
+  "semantic": {
+    "defaultConfiguration": "default",
+    "configurations": [
+      {
+        "name": "default",
+        "prioritizedFields": {
+          "titleField": { "fieldName": "title" },
+          "prioritizedContentFields": [
+            { "fieldName": "content" },
+            { "fieldName": "snippet" }
+          ],
+          "prioritizedKeywordsFields": [
+            { "fieldName": "focus" },
+            { "fieldName": "diseases" },
+            { "fieldName": "data_types" },
+            { "fieldName": "institutions" },
+            { "fieldName": "organization" }
+          ]
+        }
+      }
+    ]
+  }
+}

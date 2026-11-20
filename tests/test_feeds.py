@@ -1,4 +1,4 @@
-"""Tests for feeds.fetch and feeds.load_source_resilient (storage mocked)."""
+"""Tests for HTTP fetching and source failure handling without corpus Blob writes."""
 import io
 import json
 import types
@@ -85,46 +85,21 @@ def _fake_source(fetch):
         fetch=fetch, normalize=lambda raw: raw)
 
 
-def test_live_caches_and_returns_live(monkeypatch):
-    uploaded = {}
-    monkeypatch.setattr(feeds.storage, "upload_blob",
-                        lambda name, data: uploaded.update({name: data}))
+def test_live_returns_normalized_records():
     src = _fake_source(lambda: [{"id": "1"}])
     docs, status = feeds.load_source_resilient(src)
     assert status == "live" and docs == [{"id": "1"}]
-    assert "demo.docs.json" in uploaded
 
 
-def test_fetch_fails_falls_back_to_cache(monkeypatch):
-    cached = json.dumps([{"id": "cached"}]).encode()
-    recached = {}
-    monkeypatch.setattr(feeds.storage, "download_blob", lambda name: cached)
-    monkeypatch.setattr(feeds.storage, "upload_blob",
-                        lambda name, data: recached.update({name: data}))
-
-    def boom():
-        raise RuntimeError("down")
-
-    docs, status = feeds.load_source_resilient(_fake_source(boom))
-    assert status == "cache" and docs == [{"id": "cached"}]
-    assert recached, "cache should be carried forward"
-
-
-def test_fetch_fails_no_cache_returns_failed(monkeypatch):
-    monkeypatch.setattr(feeds.storage, "download_blob", lambda name: None)
-
+def test_fetch_failure_is_reported_for_index_carry_forward(caplog):
     def boom():
         raise RuntimeError("down")
 
     docs, status = feeds.load_source_resilient(_fake_source(boom))
     assert docs is None and status == "failed"
+    assert "live ingest failed for demo" in caplog.text
 
 
-def test_fetch_fails_bad_cache_returns_failed(monkeypatch):
-    monkeypatch.setattr(feeds.storage, "download_blob", lambda name: b"not json")
-
-    def boom():
-        raise RuntimeError("down")
-
-    docs, status = feeds.load_source_resilient(_fake_source(boom))
+def test_invalid_normalizer_output_is_a_failed_source():
+    docs, status = feeds.load_source_resilient(_fake_source(lambda: {"not": "a list"}))
     assert docs is None and status == "failed"

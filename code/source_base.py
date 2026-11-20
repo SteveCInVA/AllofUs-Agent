@@ -10,9 +10,9 @@ A normalized record is a plain dict that MUST contain:
   - "source"  the source key (e.g. "publication", "ihcc")
   - "title"   display title
   - "url"     clickable source link
-  - "_body"   the searchable text blob (dropped from the stored corpus; used only
-              to build the BM25 tokens). Any other keys (snippet, date, focus,
-              country, ...) are carried through to search results as-is.
+  - "_body"   the searchable text mapped to the Search index's "content" field.
+Optional "_institutions" preserves institution collections without splitting
+comma-separated display strings. Only fields declared in index.json are indexed.
 """
 from dataclasses import dataclass, field
 from typing import Callable, List, Dict, Any
@@ -25,14 +25,14 @@ class Source:
     fetch: Callable[[], Any]                   # () -> raw data (or raises)
     normalize: Callable[[Any], List[Dict]]     # raw -> [normalized record dicts]
     enabled: bool = True
-    cache_blob: str = ""                        # per-source normalized-docs cache blob
+    cache_blob: str = ""                        # legacy; no longer used by Search ingestion
     record_type: str = ""                       # optional label for the record kind
     # Applied from the DATASET_CLASSIFICATION app-setting (see sources.py), not
     # hardcoded here. "public" = gated by the base entitlement only; "restricted"
     # = additionally requires the Entra group in entitlement_group_id.
     classification: str = "public"
     entitlement_group_id: str = ""              # Entra group object id (restricted only)
-    index_blob: str = ""                        # per-dataset index blob (index/<key>.pkl)
+    index_blob: str = ""                        # legacy; no longer used by Search ingestion
 
     def __post_init__(self):
         if not self.cache_blob:

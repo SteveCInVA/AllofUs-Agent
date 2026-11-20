@@ -73,7 +73,7 @@ def norm_ccdi(payload):
         org_name[ident] = o.get("name", "")
         meta = o.get("metadata") or {}
         insts = meta.get("institution") or []
-        org_inst[ident] = ", ".join(_mv(i) or "" for i in insts if _mv(i))
+        org_inst[ident] = [clean(_mv(i)) for i in insts if _mv(i)]
 
     # resolve a human link + node description per org, keyed by source/owner
     url_by_source, desc_by_source = {}, {}
@@ -102,7 +102,8 @@ def norm_ccdi(payload):
         short = clean(str(_mv(meta.get("study_short_title")) or ""))
         study_id = clean(str(_mv(meta.get("study_id")) or ""))
         oname = org_name.get(org_id, org_id.upper())
-        inst = org_inst.get(org_id, "")
+        institution_names = org_inst.get(org_id, [])
+        inst = ", ".join(institution_names)
         desc = clean(ns.get("description", ""))
         node_desc = desc_by_source.get(org_id) or desc_by_source.get(oname.lower(), "")
         url = (url_by_source.get(org_id)
@@ -121,6 +122,7 @@ def norm_ccdi(payload):
             "title": title,
             "organization": oname,
             "institutions": inst,
+            "_institutions": institution_names,
             "study_id": study_id or study_name,
             "url": url,
             "snippet": snippet,

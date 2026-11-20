@@ -1,6 +1,6 @@
 # Security Hardening (as-built controls and remaining gaps)
 
-**Reviewed: 2026-11-07, implementation commit `23f9658`.** The controls below are
+**Original review: 2026-11-07; updated for Azure AI Search ingestion.** The controls below are
 implemented in the repository. This is not a claim of production readiness or a
 live-environment security certification. Access-model detail is in
 [`auth-design.md`](auth-design.md).
@@ -13,7 +13,8 @@ live-environment security certification. Access-model detail is in
   `/api/health` is excluded. Function routes themselves are `ANONYMOUS`.
 - **Search entitlement:** `auth.has_base()` requires the configured base group.
   `auth.entitled_keys()` selects public sources plus restricted sources whose
-  group IDs are held; `function_app._engine()` merges only that set.
+  group IDs are held. Search filters combine that set with indexed classification
+  and configured-group checks before returning results.
 - **Refresh administration:** HTTP refresh requires `ADMIN_ROLE` (default
   `Agent.Admin`). The role alone suffices; base/dataset memberships are not
   required. The internal timer is not an HTTP caller.
@@ -30,27 +31,25 @@ remain group-object-ID claims, not be emitted as role claims.
 
 ## Index isolation and packaging
 
-Refresh creates per-dataset `index/<key>.pkl` blobs and
-`index/manifest.json`. Index records omit underscore-prefixed fields such as
-`_body`, while normalized-doc caches (`<key>.docs.json`) retain searchable text.
-Both cached documents and tokens can contain restricted information; they
-remain internal data, not a sanitized public export.
+Refresh uploads source metadata into the shared Azure AI Search index, including
+full searchable `content`, `security_type`, and `allowed_group_ids`. The content
+can include restricted information; the index is not a sanitized public export.
+Permissions are supplied by source configuration, not upstream document values.
 
-The request-specific BM25 engine includes only entitled dataset keys. A
-restricted index is not loaded on behalf of an unentitled search request, but
-can remain cached in a process after an entitled user has loaded it. Refresh
-intentionally processes all enabled datasets.
+The backend builds a source-specific Search filter using the caller's entitled
+keys and requiring indexed classification/group values to match current
+configuration. Restrictive configuration changes exclude stale records until
+they are reimported. There are no in-process corpus/result caches or Blob
+fallbacks. Refresh intentionally processes all enabled datasets. Disabling
+`AUTH_ENFORCED` also bypasses indexed permission checks for development.
 
 `code/.funcignore` excludes **all of `index/`** and the obsolete `corpus.pkl`.
 No indexes, including public ones, ship in the deployment package.
-`build_index.py` writes local development artifacts, not a deployed first-run
-fallback. Its `--public` option depends on classification supplied to that
-process; absent classification makes all source defaults public. Blob Storage
-must be populated by refresh before a fresh deployment has searchable data.
-
-The two worker-local caches are per-index documents/tokens/ETag and per-entitlement
-merged engines/component ETags. They are not a distributed cache. See
-[`architecture.md`](architecture.md) for the shared ETag-throttle limitation.
+`build_index.py` now imports directly into Search. Its `--public` option depends
+on classification supplied to that process; absent classification makes all
+source defaults public. A new Search index must be populated by refresh before
+it has searchable records. Legacy Blob corpus files are not read or deleted
+automatically. See [Search Index Structure](search-index.md) for migration details.
 
 ## Infrastructure controls actually provisioned
 
@@ -60,6 +59,8 @@ merged engines/component ETags. They are not a distributed cache. See
 | Storage | Standard LRS, minimum TLS 1.2, Blob/Queue/Table private endpoints plus linked private DNS zones |
 | Storage permissions | Function identity receives Blob, Queue, and Table Data Contributor at account scope |
 | Runtime storage connection | Removes `AzureWebJobsStorage` connection string; injects managed-identity account/credential and per-cloud service URIs |
+| Search | Private endpoint/DNS; public access enabled during deployment and must be disabled manually afterward; API keys remain disabled; Function receives Search document read/write and index-management roles |
+| Search deployer | Resolves Azure CLI user/service principal, grants Search Service Contributor, and creates/verifies the index with temporary public access |
 | Key Vault | RBAC authorization, explicit public network access enabled; no vault private endpoint |
 | Vault permissions | Deploying signed-in user gets Secrets Officer if resolvable; Function identity gets Secrets User |
 | Connector credential | Client secret stored as `connector-client-secret` when the data-plane write succeeds |
@@ -68,8 +69,15 @@ merged engines/component ETags. They are not a distributed cache. See
 
 Private endpoints **do not by themselves disable public storage access**. The
 script does not set storage public-network denial or disable shared-key access.
-Connection-string authentication remains a supported Python storage-helper
-fallback even though the deployed settings use managed identity.
+The application no longer uses connection-string corpus storage helpers; the
+storage account remains required by the Functions host.
+
+**Search deployment exposure:** public network access is not disabled
+automatically, even on failure. The script warns and prints
+`az search service update --resource-group <resource-group> --name <search-service> --public-network-access disabled`.
+Run it after deployment or troubleshooting and verify private Function access.
+While public access is enabled, Search is network-reachable publicly but still
+requires Entra authentication and appropriate Search RBAC roles.
 
 The Function has a Key Vault read role, but no code or app setting retrieves
 the connector secret at runtime. The operator reads it and enters it into the
@@ -88,44 +96,47 @@ persisted merely because the final message says deployment completed.
 | `BASE_ENTITLEMENT_GROUP_ID` | Object ID of `AoU-Agent-Users`; missing/empty fails the base-group check |
 | `ADMIN_ROLE` | Literal role value for HTTP refresh; default `Agent.Admin` |
 | `DATASET_CLASSIFICATION` | JSON map of classification and entitlement-group IDs, read at import |
-| `CORPUS_CHECK_SECONDS` | Worker-wide ETag check interval; default 300, not a per-dataset freshness SLA |
-| `CORPUS_CONTAINER` | Internal cache container; default `cache` |
-| `INDEX_PREFIX`, `MANIFEST_BLOB` | Default `index/` and `index/manifest.json` |
+| `AZURE_SEARCH_ENDPOINT` | Required Search endpoint with private connectivity |
+| `AZURE_SEARCH_INDEX_NAME` | Defaults to `allofus-content`; deploy sets the name from `index.json` |
+| `AZURE_SEARCH_AUDIENCE` | Commercial default `https://search.azure.com`; Government `https://search.azure.us` |
+| `AZURE_AUTHORITY_HOST` | Entra authority for the selected cloud |
 
 Changing classification is an app-settings update/restart, not code redeployment.
-Run refresh afterward to align the manifest metadata. **Invalid JSON is currently
+Run refresh afterward to align indexed security metadata. **Invalid JSON is currently
 warned about and ignored; missing entries default public.** The system's
 missing-principal/base-group/admin-role checks fail closed, but its
-classification-input handling does not. Group-ID uniqueness and schema/value
-validation are also not enforced. Validate the persisted setting before allowing
+classification-input handling does not. Search mapping rejects unknown
+classifications and restricted sources without groups, but group-ID uniqueness
+and configuration map-shape validation remain incomplete. Validate the persisted setting before allowing
 users to search; the deployment's JSON-file write protects quoting, not semantics.
 
 ## Health disclosure and reliability boundaries
 
 Health intentionally returns restricted dataset names, classification, counts,
-source status, and manifest-entry timestamps without a token. It never returns
+index status, and latest document-ingestion timestamps without a token. It never returns
 records. The connector spec still inherits global OAuth for its health operation;
 anonymous API access and connector connection requirements are distinct.
 
-Health returns `status: ok` even when a dataset's stored status is `failed` or
-`carried`, or when the manifest is absent/unreadable and its dataset list is
-empty. It does not probe upstream APIs or validate storage health. Its timestamp
-is the manifest-entry write time, not last successful live ingest. It therefore
-does not yet meet an unconditional "enumerate every registered dataset" or
-readiness-check guarantee.
+Health queries Search for every enabled source, including empty sources.
+Source status is `indexed` or `empty`, not the outcome of the last refresh.
+Search errors return HTTP 503 rather than empty success. The latest indexed
+timestamp is unchanged when a source fetch fails; it is `null` for empty sources.
+Health does not probe upstream APIs, certify a complete refresh, or provide a
+transactional snapshot of all counts.
 
-Source-exception carry-forward protects a previous index only when fetch and
-cache recovery cannot return documents. Successful partial/empty responses can
-replace an existing index and reduce counts. Upload failures can leave partially
-updated indexes with an old manifest. No refresh lock, atomic snapshot, durable
-job, or last-successful-refresh tracking is implemented.
+Source-exception carry-forward leaves existing Search documents unchanged.
+Successful partial/empty responses can remove old records and reduce counts.
+Uploads are validated and acknowledged before stale IDs are deleted, but upload
+or delete failures can leave partial changes. Search updates are eventually
+consistent. No refresh lock, atomic snapshot, durable job, or persisted
+last-successful-refresh tracking is implemented; run one refresh at a time.
 
 ## Tests and review findings
 
 The offline suite covers normalizers, the shared source contract, HTTP fallback,
-storage helpers, artifacts/BM25, per-index and entitlement caches, manifest
-responses, and the Python authorization matrix. At this review it reports
-**105 passed, 4 live tests deselected, 94.63% line coverage**. CI runs Python 3.11
+Search schema mapping, batching, synchronization failures, real SDK serialization
+against an offline transport, HTTP/health responses, legacy offline BM25 helpers,
+and the Python authorization matrix. CI runs Python 3.11
 and 3.12 with an 85% coverage gate.
 
 From the repository root:
@@ -143,14 +154,13 @@ Outstanding code/deployment issues found during the as-built review:
 | Issue | Impact / follow-up needed |
 |---|---|
 | Missing/invalid classification defaults public | Strict startup validation and an explicit fail-closed classification policy are needed; current JSON-file deployment handling alone is insufficient. |
-| Shared ETag throttle checks only request keys | A cached restricted index can stay stale while public-only requests consume every check window; per-index check scheduling is needed for a bounded freshness guarantee. |
+| Non-atomic Search refresh and overlapping runs | Partial failures can leave mixed data; rerun after remediation and avoid overlapping refreshes. A distributed single-writer/job design is not implemented. |
 | Synchronous HTTP refresh with slow CCDI | Work can exceed Azure's 230s HTTP response limit; an asynchronous job pattern is not implemented. |
-| Missing-manifest health says OK with no datasets | Does not distinguish empty/uninitialized state from storage failure or enumerate registered sources; explicit readiness/error reporting is needed. |
 | Native CLI errors are generally not fail-fast | Except for the unresolved-group guard, deployment can continue after failed commands and report completion for partial setup. |
 | Cleanup is name-based across the tenant | It can delete apps/groups used by another deployment; it is not limited by the selected resource-group suffix. |
 
-Storage download/ETag helpers broadly catch exceptions and return missing-data
-values without logging. Authentication parsing also has silent failure paths.
+Search SDK errors propagate and HTTP handlers log failures; health reports 503
+for failed dependency queries. Authentication parsing still has silent failure paths.
 Structured operational metrics, denial reasons, and dependency traces are not
 implemented. [`../plans/observability-plan.md`](../plans/observability-plan.md)
 is a **proposal**, not deployed telemetry.

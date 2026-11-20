@@ -2,22 +2,31 @@
 #
 # Stands up the whole solution from scratch in one run: resource group, Entra app
 # registrations + groups + admin role, VNet + private endpoints, storage, Function
-# App (system-assigned managed identity), Key Vault, role assignments, Easy Auth,
+# App (system-assigned managed identity), Azure AI Search + index, Key Vault, role assignments, Easy Auth,
 # and all app settings (including entitlement-based authorization, enforced from
 # day one). After this runs, publish the code and assign users to the groups.
 #
 # Assumes an existing subscription and a caller with rights to create these objects
 # (including Entra Application Administrator / Cloud App Admin for the app
-# registrations, groups, and role).
+# registrations, groups, and role). Search public access is enabled for deployment;
+# disable it afterward and use the provisioned private endpoint for runtime access.
 
 ##################################################
 # update the following variables as required
 $cloud = "AzureCloud"          # or "AzureUSGovernment" for Azure Government / GCC
-$rg  = "rg-allofus-demo23"
-$sfx = "aou0923"
+$rg  = "rg-allofus-demo02"
+$sfx = "aou02"
 $storageAcctName = "staallofus$sfx"
 $functionSvcName = "func-allofus-$sfx"
 $kvName = "kv-allofus-$sfx"
+$searchSvcName = "srch-allofus-$sfx"
+$searchSku = "basic"
+$searchReplicaCount = 1       # Development capacity; review replicas/SLA for production.
+$searchPartitionCount = 1
+$searchSemanticSearch = "free"
+$searchIndexFile = Join-Path (Split-Path $PSScriptRoot -Parent) "index.json"
+$searchApiVersion = "2024-07-01"
+$searchDisablePublicAccessCommand = "az search service update --resource-group $rg --name $searchSvcName --public-network-access disabled"
 $vnetName = "vnet-allofus"
 $vnetAddressSpace = "192.168.0.0/24"
 $funcSubnetName = "pe-functions"
@@ -35,6 +44,8 @@ switch ($cloud) {
     $endpointSuffix     = "core.usgovcloudapi.net"
     $privateLinkSuffix  = "core.usgovcloudapi.net"
     $functionHostSuffix = "azurewebsites.us"
+    $searchHostSuffix   = "search.azure.us"
+    $searchAudience     = "https://search.azure.us"
     $authorityHost      = "https://login.microsoftonline.us"
     $portalOrigins      = @("https://portal.azure.us")
   }
@@ -43,11 +54,22 @@ switch ($cloud) {
     $endpointSuffix     = "core.windows.net"
     $privateLinkSuffix  = "core.windows.net"
     $functionHostSuffix = "azurewebsites.net"
+    $searchHostSuffix   = "search.windows.net"
+    $searchAudience     = "https://search.azure.com"
     $authorityHost      = "https://login.microsoftonline.com"
     $portalOrigins      = @("https://portal.azure.com", "https://ms.portal.azure.com")
   }
 }
 ##################################################
+
+if (-not (Test-Path -LiteralPath $searchIndexFile -PathType Leaf)) {
+  throw "Search index definition not found: '$searchIndexFile'."
+}
+$searchIndexDefinition = Get-Content -LiteralPath $searchIndexFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+$searchIndexName = $searchIndexDefinition.name
+if ([string]::IsNullOrWhiteSpace($searchIndexName)) {
+  throw "Search index definition '$searchIndexFile' must specify a name."
+}
 
 # Target the correct Azure cloud BEFORE login (commercial vs. government)
 az cloud set --name $cloud
@@ -264,6 +286,124 @@ foreach ($service in @("queue", "table")) {
         --name "storage-dns" --private-dns-zone "privatelink.$service.$privateLinkSuffix" --zone-name $service
 }
 
+# ============================================================ 5a. Azure AI Search
+Write-Output "Creating Azure AI Search service '$searchSvcName' with temporary public network access..."
+if ([string]::IsNullOrWhiteSpace($sami)) {
+  throw "The Function managed identity is missing; cannot configure Azure AI Search access."
+}
+Write-Warning "Deployment enables Search public network access. Disable it after deployment, including if deployment fails: $searchDisablePublicAccessCommand"
+$searchId = az search service create `
+  --resource-group $rg --name $searchSvcName --location $loc `
+  --sku $searchSku --replica-count $searchReplicaCount --partition-count $searchPartitionCount `
+  --semantic-search $searchSemanticSearch --disable-local-auth true `
+  --public-network-access enabled --query id -o tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($searchId)) {
+  throw "Failed to create Azure AI Search service '$searchSvcName'."
+}
+
+# Query and refresh share one Function identity, including document and index management.
+foreach ($role in @("Search Index Data Reader", "Search Index Data Contributor", "Search Service Contributor")) {
+  az role assignment create --assignee-object-id $sami --assignee-principal-type ServicePrincipal `
+    --role $role --scope $searchId -o none
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to assign '$role' on Azure AI Search service '$searchSvcName'."
+  }
+}
+
+$searchDnsZone = "privatelink.$searchHostSuffix"
+az network vnet subnet update `
+  --resource-group $rg --vnet-name $vnetName --name $peSubnetStorage `
+  --disable-private-endpoint-network-policies true -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to configure the private endpoint subnet for Azure AI Search."
+}
+az network private-dns zone create --resource-group $rg --name $searchDnsZone -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to create Azure AI Search private DNS zone '$searchDnsZone'."
+}
+az network private-dns link vnet create `
+  --resource-group $rg --zone-name $searchDnsZone --name "link-search" `
+  --virtual-network $vnetName --registration-enabled false -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to link Azure AI Search private DNS to '$vnetName'."
+}
+az network private-endpoint create `
+  --resource-group $rg --name "pe-$searchSvcName" `
+  --vnet-name $vnetName --subnet $peSubnetStorage `
+  --private-connection-resource-id $searchId --group-id searchService `
+  --connection-name "pl-$searchSvcName" -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to create the Azure AI Search private endpoint."
+}
+az network private-endpoint dns-zone-group create `
+  --resource-group $rg --endpoint-name "pe-$searchSvcName" `
+  --name "search-dns" --private-dns-zone $searchDnsZone --zone-name searchService -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to associate the Azure AI Search private endpoint with its DNS zone."
+}
+
+# Search is the corpus store for refresh, search, and health.
+$searchEndpoint = "https://$searchSvcName.$searchHostSuffix"
+az functionapp config appsettings set --resource-group $rg --name $functionSvcName `
+  --settings "AZURE_SEARCH_ENDPOINT=$searchEndpoint" "AZURE_SEARCH_AUDIENCE=$searchAudience" `
+    "AZURE_SEARCH_INDEX_NAME=$searchIndexName" -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to configure Azure AI Search settings on Function '$functionSvcName'."
+}
+
+# ============================================================ 5b. Search index
+$searchCallerJson = az account show --query user -o json
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to determine the Azure CLI identity for Search index creation."
+}
+$searchCaller = $searchCallerJson | ConvertFrom-Json -ErrorAction Stop
+switch ($searchCaller.type) {
+  "user" {
+    $searchDeployerId = az ad signed-in-user show --query id -o tsv
+    $searchDeployerType = "User"
+  }
+  "servicePrincipal" {
+    $searchDeployerId = az ad sp show --id $searchCaller.name --query id -o tsv
+    $searchDeployerType = "ServicePrincipal"
+  }
+  default {
+    throw "Unsupported Azure CLI identity type '$($searchCaller.type)' for Search index creation."
+  }
+}
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($searchDeployerId)) {
+  throw "Failed to resolve the deployer's object ID for Search index creation."
+}
+az role assignment create --assignee-object-id $searchDeployerId --assignee-principal-type $searchDeployerType `
+  --role "Search Service Contributor" --scope $searchId -o none
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to grant the deployer Search Service Contributor on '$searchSvcName'."
+}
+
+$searchIndexUri = "$searchEndpoint/indexes/$($searchIndexName)?api-version=$searchApiVersion"
+$searchIndexCreated = $false
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+  Write-Output "Creating or updating Search index '$searchIndexName' (attempt $attempt/20)..."
+  $indexResult = az rest --method put --uri $searchIndexUri --resource $searchAudience `
+    --headers "Content-Type=application/json" --body "@$searchIndexFile" -o none 2>&1
+  if ($LASTEXITCODE -eq 0) {
+    $searchIndexCreated = $true
+    break
+  }
+  Write-Warning "Search index request failed: $($indexResult -join [Environment]::NewLine)"
+  if ($attempt -lt 20) {
+    Write-Output "Waiting 30s for Search RBAC, DNS, or service readiness..."
+    Start-Sleep -Seconds 30
+  }
+}
+if (-not $searchIndexCreated) {
+  throw "Failed to create Search index '$searchIndexName'. Verify network access, DNS, Search RBAC propagation, and the index definition. Public network access remains enabled for deployment; API keys remain disabled. Disable public access after troubleshooting: $searchDisablePublicAccessCommand"
+}
+$verifiedIndexName = az rest --method get --uri $searchIndexUri --resource $searchAudience --query name -o tsv
+if ($LASTEXITCODE -ne 0 -or $verifiedIndexName -ne $searchIndexName) {
+  throw "Could not verify Search index '$searchIndexName' after creation."
+}
+Write-Output "Verified Search index '$verifiedIndexName'. No documents have been loaded by this step."
+
 write-output "Setting up Key Vault '$kvName' and storing connector secret..."
 # ============================================================ 6. Key Vault (connector secret)
 # NOTE: RBAC-authorization vaults require a data-plane ROLE to read/write secrets - being
@@ -393,6 +533,8 @@ foreach ($origin in $portalOrigins) {
 Write-Output ""
 Write-Output "Deployment complete."
 Write-Output "  Function:     https://$functionSvcName.$functionHostSuffix"
+Write-Output "  AI Search:    $searchEndpoint (public access enabled for deployment; Entra authentication only)"
+Write-Output "  Search index: $searchIndexName"
 Write-Output "  API appId:    $apiApp"
 if ($kvSecretStored) {
   Write-Output "  Client appId: $clientApp   (secret in Key Vault '$kvName' / connector-client-secret)"
@@ -403,9 +545,13 @@ if ($kvSecretStored) {
 Write-Output "  Base group:   $baseGroup (AoU-Agent-Users)"
 Write-Output "  IHCC group:   $ihccGroup (AoU-DS-IHCC)"
 Write-Output "  CCDI group:   $ccdiGroup (AoU-DS-CCDI)"
+Write-Warning "ACTION REQUIRED: Azure AI Search public network access is still enabled. Disable it after deployment is complete."
+Write-Output "  $searchDisablePublicAccessCommand"
+Write-Output "  After disabling public access, verify Function search/health through the private endpoint."
 
 ##################################
 # NEXT STEPS
+#  Disable Search public access after deployment: run $searchDisablePublicAccessCommand.
 #  1. Publish the code:   cd /code ; func azure functionapp publish $functionSvcName --build remote
 #  2. Assign users to AoU-Agent-Users (base) + AoU-DS-IHCC / AoU-DS-CCDI as needed,
 #     and grant the $adminRole app role to admins (for POST /api/refresh).
