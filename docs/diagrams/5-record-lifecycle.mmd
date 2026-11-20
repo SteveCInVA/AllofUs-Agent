@@ -1,8 +1,10 @@
 flowchart LR
     RAW["Raw JSON metadata"] --> NORM["Normalized record<br/>id, source, record_type, title,<br/>url, snippet, _body, metadata"]
-    NORM --> STORE["Slim record<br/>remove underscore-prefixed fields"]
-    NORM --> TOK["Lowercase alphanumeric tokens<br/>from _body"]
-    STORE --> IDX["index/key.pkl<br/>docs and tokens; no BM25 object"]
-    TOK --> IDX
-    IDX --> ENG["Merge entitled indexes<br/>build BM25 in memory"]
-    ENG --> HIT["Search result<br/>non-empty metadata plus score"]
+    NORM --> MAP["storage.search_document<br/>validate and map the 25 index.json fields"]
+    CONFIG["Source configuration<br/>classification and entitlement group"] --> MAP
+    MAP --> DOC["Search document<br/>encoded source-qualified ID; _body becomes content<br/>typed metadata; ingested_at; security fields"]
+    DOC --> IDX["Shared allofus-content index<br/>complete uploads; stale IDs deleted after success"]
+    IDX --> QUERY["Filtered simple full-text query<br/>service-side ranking; no semantic reranking requested"]
+    QUERY --> HIT["Display result plus score<br/>decode original ID; omit empty fields<br/>institutions and citations retain string display format"]
+    IDX --> HEALTH["Health: count and latest ingestion time by source<br/>no document content returned"]
+    HIDDEN["Search API omits content, security fields,<br/>publication_year and ingested_at"] -.-> HIT

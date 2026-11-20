@@ -2,8 +2,16 @@ flowchart LR
     U["Signed-in user"] --> AG["Copilot Studio agent"]
     AG --> CC["Custom connector<br/>delegated Entra OAuth2"]
     CC --> EA["Easy Auth<br/>issuer, audience, client allowlist"]
-    EA --> FN["Azure Function<br/>group and role checks"]
-    FN --> RES["Entitled ranked matches<br/>title, snippet, source URL"]
-    FN --> ST["Blob Storage<br/>indexes and manifest"]
-    SRC["Public metadata endpoints<br/>All of Us, IHCC GitHub, CCDI"] --> RJ["Timer or admin refresh"]
-    RJ --> ST
+    EA --> FN["Azure Functions Python API<br/>search, refresh, health, timer"]
+    FN -- "entitled full-text query" --> SRCH["Azure AI Search<br/>shared allofus-content index"]
+    SRCH -- "ranked records" --> FN
+    FN --> RES["Entitled matches<br/>title, snippet, source URL, score"]
+    FN --> RJ["Per-source ingestion<br/>timer or admin refresh"]
+    CLI["build_index.py<br/>CLI import; optional --public"] --> RJ
+    SRC["Public metadata endpoints<br/>All of Us, IHCC GitHub, CCDI"] --> RJ
+    RJ -- "upload; then delete stale IDs" --> SRCH
+    FN -- "anonymous health counts" --> SRCH
+    FN -. "host and timer infrastructure only" .-> ST["Azure Storage<br/>no application corpus files"]
+    NET["Function managed identity<br/>Search RBAC, VNet, private endpoint and DNS"] -. "runtime Search access" .-> SRCH
+    DEP["Deployment script + index.json<br/>create or update index; verify definition"] -. "Entra-authenticated administration" .-> SRCH
+    OPS["Operator disables temporary<br/>Search public access after deployment"] -.-> DEP

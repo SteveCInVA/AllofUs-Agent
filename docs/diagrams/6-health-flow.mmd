@@ -1,0 +1,8 @@
+flowchart TB
+    Q["GET /api/health<br/>anonymous; excluded from Easy Auth"] --> SOURCES["Enumerate all enabled sources<br/>including restricted and empty sources"]
+    SOURCES --> QUERY["For each source: Azure AI Search<br/>search *; filter source; include total count<br/>top 1; ingested_at descending; select timestamp only"]
+    QUERY -- "request error or missing count" --> ERR["Log failure; HTTP 503<br/>Azure AI Search is unavailable"]
+    QUERY -- "count and latest timestamp" --> DATA["Dataset: key, name, configured classification,<br/>count, indexed/empty status, updated_at"]
+    DATA --> SUM["Sum enabled-source counts"]
+    SUM --> OUT["HTTP 200: status ok, total, datasets<br/>empty source: count 0, updated_at null"]
+    NOTE["No stored manifest or refresh outcomes<br/>no upstream availability probe<br/>restricted metadata is public; document content is not"] -.-> OUT

@@ -19,29 +19,27 @@ Source counts depend on upstream responses.
 
 ## 1. End-to-end context
 
-```mermaid
-flowchart LR
-    U["Signed-in user"] --> AG["Copilot Studio agent"]
-    AG --> CC["Custom connector: delegated Entra OAuth2"]
-    CC --> EA["Easy Auth"]
-    EA --> FN["Azure Function: entitlement checks"]
-    FN --> SRCH["Private Azure AI Search: allofus-content"]
-    SRCH --> FN
-    FN --> RES["Ranked matches with source URLs"]
-    SRC["Public metadata endpoints"] --> RJ["Timer, admin refresh, or CLI import"]
-    RJ --> SRCH
-```
+![End-to-end context](diagrams/1-context.png)
+
+[Mermaid source](diagrams/1-context.mmd)
 
 Search queries the index, not upstream APIs. The Function uses its managed identity
 for Search; private networking, DNS, and Search data roles are required. The
 storage account remains necessary for Azure Functions host/timer operations but
 no longer holds application corpus caches, indexes, or a manifest.
 
-The inline diagrams describe the Search implementation. Older files in
-[`diagrams/`](diagrams/) are historical Blob/BM25 exports and are not current
-architecture diagrams.
+The diagrams in [`diagrams/`](diagrams/) describe the Azure AI Search
+implementation and have matching editable `.mmd` sources and PNG exports.
+Render from that directory with
+`mmdc -i <file>.mmd -o <file>.png -b white -s 2`.
+The deployment creates the index with temporary public Search access and API
+keys disabled; the operator must disable public access after deployment.
 
 ## 2. Module map
+
+![Module dependencies](diagrams/2-module-map.png)
+
+[Mermaid source](diagrams/2-module-map.mmd)
 
 | Module | Responsibility |
 |---|---|
@@ -62,15 +60,9 @@ instructions also need updating.
 
 ## 3. Search request flow
 
-```mermaid
-flowchart TB
-    Q["GET or POST /api/search"] --> AUTH{"Authenticated and in base group?"}
-    AUTH -- "no" --> DENY["401 or 403"]
-    AUTH -- "yes" --> KEYS["Public plus group-entitled restricted source keys"]
-    KEYS --> FILTER["Combine source selection with indexed classification/group filters"]
-    FILTER --> SRCH["Azure AI Search full-text query"]
-    SRCH --> OUT["Original source IDs, display metadata, score, and returned count"]
-```
+![Search request execution](diagrams/3-search-flow.png)
+
+[Mermaid source](diagrams/3-search-flow.mmd)
 
 The API retains `query`, `directory` (or legacy `source`), and `top`. Defaults are
 `directory=both` (equivalent to `all`) and `top=8`, clamped to 1-25. Plural aliases
@@ -80,6 +72,8 @@ The API retains `query`, `directory` (or legacy `source`), and `top`. Defaults a
 The server tokenizes the description into plain terms, requests any-term matching
 with Search's simple full-text query, and filters before results are returned.
 Ranking is now service-side; scores and ordering can differ from legacy BM25.
+The index defines a semantic configuration, but the API does not request
+semantic reranking or a scoring profile.
 The API preserves original IDs, string citation counts, comma-separated institution
 display values, and numeric scores. It does not expose indexed content or group
 IDs. There are no per-index or per-entitlement corpus caches or ETag reloads.
@@ -89,20 +83,9 @@ all enabled sources. This is a development bypass, not the deployed default.
 
 ## 4. Refresh flow (per-source resilience)
 
-```mermaid
-flowchart TB
-    T["Timer 03:00 UTC, admin POST refresh, or CLI"] --> LOOP["For each enabled source"]
-    LOOP --> LIVE{"Fetch and normalize"}
-    LIVE -- "exception" --> CARRY["Leave indexed records untouched; report carried or failed"]
-    LIVE -- "success" --> MAP["Validate and map schema fields"]
-    MAP --> OLD["Enumerate existing source IDs"]
-    OLD --> UP["Upload full documents in bounded batches"]
-    UP --> ACK{"Every upload acknowledged?"}
-    ACK -- "no" --> FAIL["Fail refresh; do not delete stale IDs"]
-    ACK -- "yes" --> DEL["Delete previously indexed IDs absent from the source response"]
-    DEL --> REPORT["Return per-source counts and statuses"]
-    CARRY --> REPORT
-```
+![Refresh and import execution](diagrams/4-refresh-flow.png)
+
+[Mermaid source](diagrams/4-refresh-flow.mmd)
 
 `feeds.fetch()` tries `urllib` (three attempts by default, timeout 180s per
 attempt), then an HTTP/2-capable `httpx` fallback. CCDI uses one urllib attempt
@@ -133,6 +116,10 @@ Slow CCDI requests can exceed
 Inspect execution logs before retrying a timed-out request.
 
 ## 5. Record lifecycle and configuration
+
+![Record lifecycle](diagrams/5-record-lifecycle.png)
+
+[Mermaid source](diagrams/5-record-lifecycle.mmd)
 
 Raw metadata is normalized with the existing source contract, then mapped to the
 25 fields in [index.json](../index.json). `_body` becomes persistent `content`;
@@ -169,6 +156,10 @@ API. This change does not re-export the solution or structurally restrict it to
 connector-grounded responses.
 
 ## Health, observability, and boundaries
+
+![Health request execution](diagrams/6-health-flow.png)
+
+[Mermaid source](diagrams/6-health-flow.mmd)
 
 `GET /api/health` queries every enabled source in Search and returns `status: ok`,
 `total`, and `datasets`. Each entry includes name, current configured classification,

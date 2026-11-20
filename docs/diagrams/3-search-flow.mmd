@@ -1,10 +1,18 @@
 flowchart TB
-    Q["GET or POST /api/search"] --> AUTH{"Authenticated<br/>and in base group?"}
+    Q["GET or POST /api/search"] --> INPUT["Parse query, directory or legacy source, top<br/>default both and 8; clamp top to 1-25"]
+    INPUT --> VALID{"Non-empty query?"}
+    VALID -- "no" --> BAD["HTTP 400"]
+    VALID -- "yes" --> AUTH{"Authenticated<br/>and in base group?"}
     AUTH -- "no" --> DENY["401 or 403"]
     AUTH -- "yes" --> KEYS["Select public plus<br/>group-entitled restricted keys"]
-    KEYS --> CHECK["Throttled ETag check<br/>for requested cached indexes"]
-    CHECK --> LOAD["Load uncached or changed indexes<br/>Blob first, local-dev fallback"]
-    LOAD --> MERGE["Reuse or build merged BM25<br/>for sorted entitlement signature"]
-    MERGE --> SCORE["Score all entitled records"]
-    SCORE --> FILTER["Filter source, take top positive scores<br/>drop empty fields, add score"]
-    FILTER --> OUT["JSON results and returned count<br/>empty if no index or positive match"]
+    KEYS --> SELECT["Map directory aliases to source<br/>intersect with entitled keys; both/all means all entitled"]
+    SELECT --> FILTER["Build OData source clauses<br/>require current security_type and restricted allowed_group_ids"]
+    FILTER --> TEXT["Tokenize query into plain terms"]
+    TEXT --> READY{"Source clauses and terms present?"}
+    READY -- "no" --> EMPTY["Empty results; no Search request"]
+    READY -- "yes" --> SCORE["Azure AI Search<br/>simple query; any-term matching; top limit"]
+    SCORE -- "error" --> ERR["Log failure; HTTP 500"]
+    SCORE -- "ranked records" --> MAP["Select display fields; restore original IDs<br/>format institutions and citations; round score"]
+    EMPTY --> OUT["JSON: query, directory, count, results"]
+    MAP --> OUT
+    DEV["AUTH_ENFORCED=false: development only<br/>skip claims and indexed permission checks"] -.-> KEYS

@@ -1,27 +1,31 @@
 flowchart TB
     FA["function_app.py<br/>search, refresh, health, timer"]
     AUTH["auth.py<br/>principal and entitlements"]
-    RJ["refresh_job.py<br/>per-dataset build and manifest"]
-    BI["build_index.py<br/>local development artifacts"]
+    RJ["refresh_job.py<br/>per-source import and carry-forward"]
+    BI["build_index.py<br/>CLI Search import"]
     REG["sources.py<br/>registry and classification"]
     SRC["source_allofus.py, source_ihcc.py, source_ccdi.py"]
     SB["source_base.py<br/>Source contract"]
-    FEED["feeds.py<br/>HTTP and normalized-doc cache"]
-    SC["search_core.py<br/>artifacts and BM25"]
-    ST["storage.py<br/>named blobs, indexes, manifest"]
+    FEED["feeds.py<br/>retrying HTTP; logged source failures"]
+    SC["search_core.py<br/>text helpers and directory aliases<br/>legacy offline utilities not used by runtime"]
+    ST["storage.py<br/>schema mapping, source sync,<br/>authorized queries, health counts"]
+    SDK["SearchClient + DefaultAzureCredential<br/>cached client, not cached corpus"]
+    IDX["Azure AI Search<br/>allofus-content"]
     FA --> AUTH
     FA --> RJ
     FA --> SC
     FA --> ST
-    AUTH --> REG
     RJ --> REG
     RJ --> FEED
-    RJ --> SC
     RJ --> ST
     BI --> REG
-    BI --> SC
+    BI --> RJ
+    ST --> REG
+    ST --> SB
+    ST --> SC
+    ST --> SDK
+    SDK --> IDX
     REG --> SRC
     SRC --> SB
     SRC --> FEED
     SRC --> SC
-    FEED --> ST

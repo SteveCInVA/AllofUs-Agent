@@ -2,9 +2,15 @@ flowchart TB
     U["Signed-in user"] --> CC["Copilot Studio custom connector"]
     CC --> EA["Easy Auth<br/>issuer, audience, allowed client"]
     EA -- "reject" --> DENY["Platform 401 or 403"]
-    EA -- "validated principal" --> BASE{"Base group present?"}
+    EA -- "validated principal" --> BASE{"Function principal and<br/>base group present?"}
+    BASE -- "missing principal" --> R401["Function 401"]
     BASE -- "no" --> R403["Function 403"]
     BASE -- "yes" --> KEYS["Public plus group-entitled<br/>restricted dataset keys"]
-    KEYS --> LOAD["Load or reuse entitled indexes"]
-    LOAD --> BM["Merged BM25 scoring"]
-    BM --> OUT["Filtered matches and returned count"]
+    KEYS --> SELECT["Intersect directory/source selection<br/>with entitled source keys"]
+    SELECT --> FILTER["OData source and security_type filters<br/>restricted: allowed_group_ids matches configured group"]
+    FILTER --> ANY{"Any selected source?"}
+    ANY -- "no" --> EMPTY["Empty results; no Search request"]
+    ANY -- "yes" --> SRCH["Azure AI Search simple full-text query<br/>Function identity via Search RBAC and private endpoint"]
+    SRCH -- "ranked matches" --> OUT["Display metadata, score and returned count<br/>no content or group IDs"]
+    EMPTY --> OUT
+    SRCH -- "error" --> ERR["Log failure; HTTP 500"]

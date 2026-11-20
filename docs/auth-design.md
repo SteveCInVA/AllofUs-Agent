@@ -151,21 +151,11 @@ persistence. All sources share the configured Azure AI Search index. See
 
 ## 7. Authorized search flow
 
-The following flow describes Search retrieval; older exports in `diagrams/`
-describe the historical Blob/BM25 implementation.
+![Authorized Azure AI Search execution](diagrams/auth-search-flow.png)
 
-```mermaid
-flowchart TB
-    U["Signed-in user"] --> CC["Copilot Studio custom connector"]
-    CC --> EA["Easy Auth<br/>issuer, audience, allowed client"]
-    EA -- "reject" --> DENY["Platform 401 or 403"]
-    EA -- "validated principal" --> BASE{"Base group present?"}
-    BASE -- "no" --> R403["Function 403"]
-    BASE -- "yes" --> KEYS["Public plus group-entitled<br/>restricted dataset keys"]
-    KEYS --> LOAD["Build source plus indexed security filters"]
-    LOAD --> BM["Azure AI Search full-text scoring"]
-    BM --> OUT["Filtered matches and returned count"]
-```
+Exports: [PNG](diagrams/auth-search-flow.png) and
+[Mermaid source](diagrams/auth-search-flow.mmd). The source and export describe
+the current shared-index implementation.
 
 Unentitled sources are excluded in the server-generated Search filter, not
 filtered from a downloaded corpus afterward. For restricted sources the filter
