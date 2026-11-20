@@ -136,8 +136,7 @@ last-successful-refresh tracking is implemented; run one refresh at a time.
 The offline suite covers normalizers, the shared source contract, HTTP fallback,
 Search schema mapping, batching, synchronization failures, real SDK serialization
 against an offline transport, HTTP/health responses, legacy offline BM25 helpers,
-and the Python authorization matrix. CI runs Python 3.11
-and 3.12 with an 85% coverage gate.
+and the Python authorization matrix. CI runs Python 3.12 with an 85% coverage gate.
 
 From the repository root:
 
