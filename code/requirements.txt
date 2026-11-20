@@ -1,6 +1,6 @@
-azure-functions
-azure-search-documents
-azure-identity
-httpx[http2]
-rank_bm25
-numpy
+azure-functions==1.25.0
+azure-search-documents==12.1.0
+azure-identity==1.25.3
+httpx[http2]==0.28.1
+rank_bm25==0.2.2
+numpy==2.5.3
