@@ -23,7 +23,7 @@ The agent searches four source families for work similar to a description the us
                               - Incorporated Security Model to handle public / restricted data handling
                               - Updated documentation / deployment for configuration in Azure Commercial / GCC
   - Updated:       2026-09-22 - Finalized entitlement-based greenfield deployment flow, managed-identity storage auth, Easy Auth enforcement, and testing script workflow
-
+  - Updated:       2026-11-20 - Updated search to use Azure Search instead of file based BM20 Search solution.
 
 ## Assumptions:
 The deployment code assumes:
