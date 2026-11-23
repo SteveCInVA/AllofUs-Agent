@@ -5,6 +5,9 @@ updates:
     directories:
       - "/"
       - "/code"
+    ignore:
+      - dependency-name: "azure-functions"
+        versions: [">=2.0.0"]
     schedule:
       interval: "weekly"
       day: "monday"
