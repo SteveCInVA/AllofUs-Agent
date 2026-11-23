@@ -228,6 +228,11 @@ the default recovery. See [the claims reference](docs/auth-design.md#4-group-and
 
 #### Function Code Deployment
 
+The application targets Python 3.12. Keep `azure-functions` on the compatible
+1.x SDK line: version 2.4.0 requires Python 3.13 or newer and fails the Python
+3.12 remote build. Dependabot excludes 2.x and later until a deliberate runtime
+upgrade is made.
+
 Use the same window that the infrastructure deployment completed in, then publish the
 code (the build runs remotely; ~5 minutes):
 
