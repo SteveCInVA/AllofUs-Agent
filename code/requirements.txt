@@ -1,4 +1,4 @@
-azure-functions==1.25.0
+azure-functions==2.4.0
 azure-search-documents==12.1.0
 azure-identity==1.27.0
 httpx[http2]==0.28.1
